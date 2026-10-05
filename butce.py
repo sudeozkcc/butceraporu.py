@@ -1,31 +1,3 @@
-Yıl tespitindeki mantık hatasını düzelttim ve kodun genel yapısını lojistik bütçe sunumunuza tam uyacak şekilde basitleştirdim.
-
-### Yapılan Temel Düzenlemeler
-
-1. **Yıl Algılama Mantığı Düzeltildi:**
-* Sütunlardaki sayısal değerlerin (örneğin 2000, 2097 gibi rakamların) yanlışlıkla yıl olarak algılanması engellendi. Artık yıl değerleri strictly `2020 - 2030` aralığında aranıyor ve kullanıcının seçtiği varsayılan yıl garantili olarak kullanılıyor.
-
-
-2. **2025 ve 2026 İçin Noktasal Grafik & Palet Başına Ortalama Gelir:**
-* Her iki yıl için de üstte **Noktasal Grafik (Ciro ve Palet gelişimi)** yer alıyor.
-* Grafiğin hemen altında **Palet Başına Ort. Gelir (₺/Palet)** ve Toplam Metrikler kartlar halinde sunuluyor.
-* Altında ise **Top 20 Müşteri Tablosu** tam istediğiniz biçimlerde gösteriliyor: Cirolar `180.085,98 ₺`, Paletler `1.450` formatında.
-
-
-3. **2025 vs 2026 Noktasal Karşılaştırması:**
-* İki yılın Top 20 müşteri ciroları ve paletleri tek bir noktasal grafikte üst üste bindirilerek net bir değişim tablosu sunuluyor.
-
-
-4. **2027 Hedefleri (En Önemli 10 Müşteri Beklentisi):**
-* 2027 bütçelemesinde odak dağılmaması için en kritik **Top 10 Müşteri** ayrılıyor ve bu 10 müşteri üzerinden büyüme beklentileri simüle ediliyor.
-
-
-
----
-
-### Güncellenmiş Temiz Python (Streamlit) Kodu
-
-```python
 import io
 import re
 import numpy as np
@@ -33,10 +5,10 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-st.set_page_config(page_title="Lojistik Bütçe & Ciro Analiz Portalı", page_icon="🚚", layout="wide")
+st.set_page_config(page_title="Lojistik Ciro & Bütçe Analizi", page_icon="🚚", layout="wide")
 
 # ===================================================================
-# BİÇİMLENDİRME & YARDIMCI FONKSİYONLAR
+# YARDIMCI BİÇİMLENDİRME FONKSİYONLARI
 # ===================================================================
 _TR = str.maketrans("İıŞşĞğÜüÖöÇç", "IISSGGUUOOCC")
 
@@ -77,7 +49,7 @@ def fmt_palet(x) -> str:
     return tr_num(x, dec=0)
 
 # ===================================================================
-# HASSAS EXCEL PARS ETME (YIL HATASI DÜZELTİLDİ)
+# EXCEL VERİ OKUMA SİSTEMİ
 # ===================================================================
 @st.cache_data(show_spinner=False)
 def get_sheet_names(file_bytes: bytes):
@@ -99,7 +71,6 @@ def parse_logistic_excel(file_bytes: bytes, sheet: str, default_year: int) -> pd
             met = "Ciro"
             
         if met:
-            # Yıl tespiti: Sadece 2020-2030 arasındaki geçerli yılları al
             ym = re.search(r"\b(202[0-9])\b", col_text)
             yr = int(ym.group(1)) if ym else default_year
             metric_cols[j] = (met, yr)
@@ -140,27 +111,26 @@ def parse_logistic_excel(file_bytes: bytes, sheet: str, default_year: int) -> pd
 # ===================================================================
 # STREAMLIT ARAYÜZ
 # ===================================================================
-st.title("🚚 Lojistik Bütçe Sunum ve Ciro Analiz Portalı")
+st.title("🚚 Lojistik Ciro, Palet & Bütçe Sunum Portalı")
 
-up = st.sidebar.file_uploader("Excel Ciro Raporunu Yükleyin (.xlsx)", type=["xlsx"])
-default_yr = st.sidebar.number_input("Sayfada Yıl Yazmıyorsa Varsayılan Yıl", 2020, 2030, 2025)
+up = st.sidebar.file_uploader("Excel Raporunu Yükleyin (.xlsx)", type=["xlsx"])
+default_yr = st.sidebar.number_input("Varsayılan Yıl (Başlıkta Yoksa)", 2020, 2030, 2025)
 
 if up is None:
-    st.info("👈 Başlamak için lütfen Excel dosyanızı sol menüden yükleyin.")
+    st.info("👈 Lütfen sol menüden Excel dosyanızı yükleyin.")
     st.stop()
 
 FB = up.getvalue()
 sheet_names = get_sheet_names(FB)
-sheet = st.sidebar.selectbox("Analiz Edilecek Sayfa:", sheet_names)
+sheet = st.sidebar.selectbox("Sayfa Seçin:", sheet_names)
 
 df_all = parse_logistic_excel(FB, sheet, int(default_yr))
 
 if df_all.empty:
-    st.error("Excel dosyasında uygun Ciro/Palet verisi tespit edilemedi.")
+    st.error("Excel dosyasında Ciro/Palet verileri ayrıştırılamadı. Sütun başlıklarını kontrol edin.")
     st.stop()
 
-# Menü Seçenekleri
-mode = st.sidebar.radio("📌 Analiz Görünümü Seçin:", [
+mode = st.sidebar.radio("📌 Çalışma Modunu Seçin:", [
     "📊 2025 Yılı Ciro Analizi",
     "📊 2026 Yılı Ciro Analizi",
     "⚔️ 2025 ve 2026 Karşılaştırması",
@@ -168,22 +138,21 @@ mode = st.sidebar.radio("📌 Analiz Görünümü Seçin:", [
 ])
 
 # ===================================================================
-# TEKİL YIL ANALİZ FONKSİYONU (2025 & 2026 İÇİN ORTAK)
+# TEKİL YIL ANALİZ FONKSİYONU
 # ===================================================================
 def render_single_year(target_year: int):
-    st.header(f"📊 {target_year} YILI CİRO VE PALET ANALİZİ")
+    st.header(f"📊 {target_year} YILI CİRO ANALİZİ")
     
     df_yr = df_all[df_all["Yıl"] == target_year].copy()
     if df_yr.empty:
-        st.warning(f"{target_year} yılına ait veri bulunamadı. Lütfen varsayılan yılı veya yüklenen dosyayı kontrol edin.")
+        st.warning(f"{target_year} yılına ait veri bulunamadı.")
         return
         
     top20 = df_yr.sort_values("Ciro", ascending=False).head(20).copy()
     top20["Palet Başı TL"] = top20.apply(lambda r: (r["Ciro"] / r["Palet"]) if r["Palet"] > 0 else 0.0, axis=1)
     
-    # 1. NOKTASAL GRAFİK (CİRO VE PALET)
-    st.subheader(f"📈 {target_year} Yılı Müşteri Bazlı Ciro ve Palet Dağılımı (Noktasal Grafik)")
-    
+    # 1. Noktasal Grafik (Ciro ve Palet)
+    st.subheader(f"📈 {target_year} Yılı Noktasal Ciro ve Palet Grafiği")
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=top20["Müşteri"], y=top20["Ciro"],
@@ -199,43 +168,42 @@ def render_single_year(target_year: int):
     ))
     
     fig.update_layout(
-        title=f"{target_year} Top 20 Müşteri Ciro ve Palet Grafiği",
         xaxis=dict(title="Müşteriler", tickangle=-45),
         yaxis=dict(title="Ciro (₺)", side="left"),
         yaxis2=dict(title="Palet Adedi", side="right", overlaying="y", showgrid=False),
-        legend=dict(x=0.8, y=1.1, orientation="h")
+        legend=dict(x=0.8, y=1.1, orientation="h"),
+        margin=dict(l=20, r=20, t=30, b=100)
     )
     st.plotly_chart(fig, use_container_width=True)
     
-    # 2. METRİK KARTLARI (PALET BAŞI ORTALAMA VE TOPLAMLAR)
+    # 2. Palet Başı Ortalama Tutar Kartları
     tot_ciro = top20["Ciro"].sum()
     tot_palet = top20["Palet"].sum()
     avg_ptl = (tot_ciro / tot_palet) if tot_palet > 0 else 0.0
     
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Palet Başı Ortalama Gelir", fmt_tl(avg_ptl))
-    m2.metric(f"{target_year} Top 20 Toplam Ciro", fmt_tl(tot_ciro))
-    m3.metric(f"{target_year} Top 20 Toplam Palet", fmt_palet(tot_palet))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Palet Başı Ort. Gelir", fmt_tl(avg_ptl))
+    c2.metric(f"{target_year} Top 20 Toplam Ciro", fmt_tl(tot_ciro))
+    c3.metric(f"{target_year} Top 20 Toplam Palet", fmt_palet(tot_palet))
     
     st.markdown("---")
     
-    # 3. TOP 20 MÜŞTERİ TABLOSU
-    st.subheader(f"🏆 {target_year} Yılı En Yüksek Cirolu İlk 20 Müşterimiz")
-    
+    # 3. Top 20 Müşteri Tablosu
+    st.subheader(f"🏆 {target_year} Yılı Top 20 Müşterimiz")
     st.dataframe(
         top20,
         use_container_width=True,
         hide_index=True,
         column_config={
             "Müşteri": st.column_config.TextColumn("Müşteri Unvanı", width="large"),
-            "Ciro": st.column_config.NumberColumn("Ciro (₺)", format="%.2f ₺"),
-            "Palet": st.column_config.NumberColumn("Palet Adedi", format="%.0f"),
+            "Ciro": st.column_config.NumberColumn("Ciro", format="%.2f ₺"),
+            "Palet": st.column_config.NumberColumn("Palet", format="%.0f"),
             "Palet Başı TL": st.column_config.NumberColumn("Palet Başı Ort. TL", format="%.2f ₺")
         }
     )
 
 # ===================================================================
-# MOD YÖNLENDİRMELERİ
+# MOD SEÇİMLERİ
 # ===================================================================
 if mode == "📊 2025 Yılı Ciro Analizi":
     render_single_year(2025)
@@ -244,7 +212,7 @@ elif mode == "📊 2026 Yılı Ciro Analizi":
     render_single_year(2026)
 
 elif mode == "⚔️ 2025 ve 2026 Karşılaştırması":
-    st.header("⚔️ 2025 vs 2026 PERFORMANS KARŞILAŞTIRMASI")
+    st.header("⚔️ 2025 vs 2026 KARŞILAŞTIRMA ANALİZİ")
     
     df_25 = df_all[df_all["Yıl"] == 2025].groupby("Müşteri")[["Ciro", "Palet"]].sum().add_suffix("_2025")
     df_26 = df_all[df_all["Yıl"] == 2026].groupby("Müşteri")[["Ciro", "Palet"]].sum().add_suffix("_2026")
@@ -252,18 +220,16 @@ elif mode == "⚔️ 2025 ve 2026 Karşılaştırması":
     cmp = df_26.join(df_25, how="outer").fillna(0.0).reset_index()
     top20_cmp = cmp.sort_values("Ciro_2026", ascending=False).head(20)
     
-    # Noktasal Ciro Karşılaştırması
-    st.subheader("📈 2025 vs 2026 Müşteri Bazlı Ciro Değişimi (Noktasal)")
+    st.subheader("📈 Noktasal Ciro Karşılaştırması (2025 vs 2026)")
     fig_cmp = go.Figure()
     fig_cmp.add_trace(go.Scatter(x=top20_cmp["Müşteri"], y=top20_cmp["Ciro_2025"], mode='markers+lines', name="2025 Ciro", marker=dict(size=10, color='orange')))
     fig_cmp.add_trace(go.Scatter(x=top20_cmp["Müşteri"], y=top20_cmp["Ciro_2026"], mode='markers+lines', name="2026 Ciro", marker=dict(size=10, color='green')))
     fig_cmp.update_layout(xaxis=dict(tickangle=-45), yaxis_title="Ciro (₺)")
     st.plotly_chart(fig_cmp, use_container_width=True)
     
-    # Karşılaştırmalı Tablo
     top20_cmp["Ciro Farkı (₺)"] = top20_cmp["Ciro_2026"] - top20_cmp["Ciro_2025"]
     
-    st.subheader("📋 Top 20 Müşteri Karşılaştırma Listesi")
+    st.subheader("📋 Top 20 Müşteri Performans Değişimi")
     st.dataframe(
         top20_cmp,
         use_container_width=True,
@@ -279,18 +245,16 @@ elif mode == "⚔️ 2025 ve 2026 Karşılaştırması":
     )
 
 elif mode == "🚀 2027 Hedeflerimiz (Top 10 Müşteri Beklentisi)":
-    st.header("🚀 2027 YILI BÜTÇE HEDEFLERİ VE BEKLENTİLER")
-    st.write("Gelecek yıl için **en önemli ilk 10 müşterimizden** beklentilerimizi ve büyüme hedeflerimizi belirliyoruz.")
+    st.header("🚀 2027 BÜTÇE HEDEFLERİ (TOP 10 MÜŞTERİ)")
     
-    # 2026 verisini baz al, yoksa mevcut en son yılı al
     last_yr = 2026 if 2026 in df_all["Yıl"].values else df_all["Yıl"].max()
     base_df = df_all[df_all["Yıl"] == last_yr].sort_values("Ciro", ascending=False).head(10).copy()
     
     if base_df.empty:
-        st.warning("Hedef oluşturmak için yeterli geçmiş yıl verisi tespit edilemedi.")
+        st.warning("Hedef belirlemek için geçmiş yıl verisi bulunamadı.")
         st.stop()
         
-    base_df["2027 Hedef Büyüme (%)"] = 20.0  # Varsayılan %20 büyüme beklentisi
+    base_df["2027 Hedef Büyüme (%)"] = 20.0
     
     edited_10 = st.data_editor(
         base_df[["Müşteri", "Ciro", "Palet", "2027 Hedef Büyüme (%)"]],
@@ -298,10 +262,10 @@ elif mode == "🚀 2027 Hedeflerimiz (Top 10 Müşteri Beklentisi)":
         hide_index=True,
         disabled=["Müşteri", "Ciro", "Palet"],
         column_config={
-            "Müşteri": st.column_config.TextColumn("Müşteri (Top 10)", width="large"),
+            "Müşteri": st.column_config.TextColumn("En Önemli 10 Müşteri", width="large"),
             "Ciro": st.column_config.NumberColumn(f"Mevcut Ciro ({last_yr})", format="%.2f ₺"),
             "Palet": st.column_config.NumberColumn(f"Mevcut Palet ({last_yr})", format="%.0f"),
-            "2027 Hedef Büyüme (%)": st.column_config.NumberColumn("2027 Büyüme Beklentisi (%)", format="%.1f %%")
+            "2027 Hedef Büyüme (%)": st.column_config.NumberColumn("Beklenen Büyüme (%)", format="%.1f %%")
         }
     )
     
@@ -313,13 +277,9 @@ elif mode == "🚀 2027 Hedeflerimiz (Top 10 Müşteri Beklentisi)":
     avg_ptl_27 = (t_ciro_27 / t_palet_27) if t_palet_27 > 0 else 0.0
     
     st.markdown("---")
-    st.subheader("🎯 2027 Yılı Top 10 Müşteri Konsolide Bütçe Beklentisi")
+    st.subheader("🎯 Top 10 Müşteri 2027 Konsolide Hedefleri")
     
     k1, k2, k3 = st.columns(3)
-    k1.metric("2027 Hedeflenen Toplam Ciro", fmt_tl(t_ciro_27))
-    k2.metric("2027 Hedeflenen Sevkiyat (Palet)", fmt_palet(t_palet_27))
-    k3.metric("2027 Hedef Palet Başı Ort. Gelir", fmt_tl(avg_ptl_27))
-    
-    st.info(f"💡 **2027 Bütçe Sunum Notu:** En kritik 10 müşterimizden toplamda **{fmt_tl(t_ciro_27)}** ciro ve **{fmt_palet(t_palet_27)}** palet hacmi beklenmektedir.")
-
-```
+    k1.metric("2027 Hedeflenen Ciro", fmt_tl(t_ciro_27))
+    k2.metric("2027 Hedeflenen Palet", fmt_palet(t_palet_27))
+    k3.metric("2027 Palet Başı Ort. Gelir", fmt_tl(avg_ptl_27))
