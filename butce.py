@@ -2,8 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import tempfile
-import os
+import io
 
 # Sayfa Yapılandırması
 st.set_page_config(
@@ -15,7 +14,7 @@ st.set_page_config(
 st.title("📊 Bütçeleme, Ciro Analizi ve Hedefleme Portalı")
 
 # -------------------------------------------------------------------
-# 1. SESSION STATE (OTURUM DURUMU) KURULUMU
+# 1. OTURUM HAFIZASI (SESSION STATE)
 # -------------------------------------------------------------------
 if "file_bytes" not in st.session_state:
     st.session_state["file_bytes"] = None
@@ -31,12 +30,12 @@ uploaded_file = st.sidebar.file_uploader(
     key="excel_uploader"
 )
 
-# Yeni bir dosya yüklendiğinde oturuma kaydet
+# Dosya yüklendikçe baytları oturuma kaydet (fonksiyon çağrısı getvalue() parantezli)
 if uploaded_file is not None:
     st.session_state["file_bytes"] = uploaded_file.getvalue()
     st.session_state["file_name"] = uploaded_file.name
 
-# Yüklü dosyayı kaldırma butonu
+# Dosyayı sıfırlamak için buton
 if st.session_state["file_bytes"] is not None:
     if st.sidebar.button("🗑️ Dosyayı Kaldır / Yenile"):
         st.session_state["file_bytes"] = None
@@ -54,24 +53,27 @@ mode = st.sidebar.radio(
 )
 
 # -------------------------------------------------------------------
-# 2. DOSYA KONTROLÜ VE GEÇİCİ DOSYA OLUŞTURMA (HATA ÖNLEYİCİ)
+# 2. DOSYA VARLIK KONTROLÜ VE YÜKLEME
 # -------------------------------------------------------------------
 if st.session_state["file_bytes"] is None:
     st.info("👈 Lütfen analizlere başlamak için sol taraftaki menüden Excel ciro raporu dosyanızı yükleyin.")
     st.stop()
-else:
-    st.success(f"📌 **Aktif Kullanılan Dosya:** `{st.session_state['file_name']}`")
 
-# Dosyayı diske geçici dosya olarak kaydet ve oradan oku (en güvenli yöntem)
+# Aktif Dosya Göstergesi
+st.success(f"📌 **Aktif Kullanılan Dosya:** `{st.session_state['file_name']}`")
+
+# Güvenli Excel Okuma Fonksiyonu
+def load_excel_sheet(sheet_name=None):
+    bytes_data = io.BytesIO(st.session_state["file_bytes"])
+    if sheet_name:
+        return pd.read_excel(bytes_data, sheet_name=sheet_name, engine="openpyxl")
+    return pd.ExcelFile(bytes_data, engine="openpyxl")
+
 try:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_file:
-        tmp_file.write(st.session_state["file_bytes"])
-        tmp_file_path = tmp_file.name
-
-    xls = pd.ExcelFile(tmp_file_path, engine="openpyxl")
+    xls = load_excel_sheet()
     sheet_names = xls.sheet_names
 except Exception as e:
-    st.error(f"Excel dosyası okunamadı. Lütfen dosyanın bozuk olmadığını ve geçerli bir .xlsx dosyası olduğunu kontrol edin.\nHata: {e}")
+    st.error(f"Excel dosyası okunamadı. Detay: {e}")
     st.stop()
 
 # -------------------------------------------------------------------
@@ -81,7 +83,7 @@ if mode == "📈 2026 Ciro Analizi (Aylık Karşılaştırma)":
     st.header("📈 2026 Ciro & Palet Analizi (Aylar Arası Karşılaştırma)")
     
     ciro_sheet = st.selectbox("Ciro Analizi Sayfasını Seçin:", sheet_names, index=0)
-    df_ciro = pd.read_excel(tmp_file_path, sheet_name=ciro_sheet, engine="openpyxl")
+    df_ciro = load_excel_sheet(ciro_sheet)
     
     aylar = ["OCAK", "ŞUBAT", "MART", "NİSAN", "MAYIS", "HAZİRAN", "TEMMUZ", "AĞUSTOS", "EYLÜL", "EKİM", "KASIM", "ARALIK"]
     
@@ -144,7 +146,7 @@ elif mode == "🎯 2025 - 2026 Hedef Karşılaştırması":
     st.header("🎯 2025 Gerçekleşen vs 2026 Hedef & Gerçekleşen")
     
     hedef_sheet = st.selectbox("Hedef Sayfasını Seçin:", sheet_names, index=min(1, len(sheet_names)-1))
-    df_hedef = pd.read_excel(tmp_file_path, sheet_name=hedef_sheet, engine="openpyxl")
+    df_hedef = load_excel_sheet(hedef_sheet)
     
     st.write("📋 **Hedef Tablosu Önizleme:**")
     st.dataframe(df_hedef.head(10))
@@ -182,7 +184,3 @@ elif mode == "🔍 Potansiyel Müşteriler & Kategori Hedefleri":
     edited_df = st.data_editor(sample_data, num_rows="dynamic")
     toplam_potansiyel = edited_df["2027 Tahmini Ciro (₺)"].sum()
     st.info(f"💰 **{cat_select}** Kategorisinden Beklenen Toplam 2027 Ek Ciro Katkısı: **₺{toplam_potansiyel:,.2f}**")
-
-# İşlem bitince geçici dosyayı sil (temizlik)
-if os.path.exists(tmp_file_path):
-    os.remove(tmp_file_path)
