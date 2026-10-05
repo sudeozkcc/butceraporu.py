@@ -1,184 +1,279 @@
+import io
+import re
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
-# ==========================================
-# STREAMLIT SAYFA AYARLARI
-# ==========================================
-st.set_page_config(page_title="Bütçe Raporu & Sunum", layout="wide")
+st.set_page_config(page_title="Bütçe ve Ciro Raporu Portalı", page_icon="📊", layout="wide")
 
+# ===================================================================
+# Biçimlendirme ve Yardımcı Fonksiyonlar
+# ===================================================================
+_TR = str.maketrans("İıŞşĞğÜüÖöÇç", "IISSGGUUOOCC")
 
-# ==========================================
-# 1. TÜRKÇE SAYI VE PARA FORMATLAMA
-# ==========================================
-def format_tl(val):
-    if pd.isna(val) or val is None:
-        return "0,00 TL"
-    return f"{val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") + " TL"
+def norm(x) -> str:
+    if x is None or (not isinstance(x, (list, tuple)) and pd.isna(x)):
+        return ""
+    return str(x).translate(_TR).upper().strip()
 
-def format_palet(val):
-    if pd.isna(val) or val is None:
-        return "0 Palet"
-    return f"{int(round(val)):,}".replace(",", ".") + " Palet"
-
-
-# ==========================================
-# 2. VERİ TEMİZLEME VE HAZIRLAMA (GENEL TOPLAM)
-# ==========================================
-def hazirla_genel_veri(df_2025, df_2026, col_musteri, col_ciro, col_palet):
-    # 2025 Gruplama
-    g25 = df_2025.groupby(col_musteri, as_index=False).agg({
-        col_ciro: "sum",
-        col_palet: "sum"
-    }).rename(columns={col_musteri: "MUSTERI", col_ciro: "CIRO_2025", col_palet: "PALET_2025"})
-
-    # 2026 Gruplama
-    g26 = df_2026.groupby(col_musteri, as_index=False).agg({
-        col_ciro: "sum",
-        col_palet: "sum"
-    }).rename(columns={col_musteri: "MUSTERI", col_ciro: "CIRO_2026", col_palet: "PALET_2026"})
-
-    # Birleştirme (Genel Toplamlar Üzerinden)
-    df_merged = pd.merge(g25, g26, on="MUSTERI", how="outer").fillna(0)
-
-    # Değişim Miktarları
-    df_merged["CIRO_DEGISIM"] = df_merged["CIRO_2026"] - df_merged["CIRO_2025"]
-    df_merged["PALET_DEGISIM"] = df_merged["PALET_2026"] - df_merged["PALET_2025"]
-
-    return df_merged
-
-
-# ==========================================
-# 3. ANA UYGULAMA VE DOSYA YÜKLEME EKRANI
-# ==========================================
-st.title("📊 Bütçe & Müşteri Analiz Raporu (2025 - 2026)")
-st.markdown("---")
-
-# Sol Panel - Dosya Yükleme
-st.sidebar.header("📁 Veri Yükleme")
-file_2025 = st.sidebar.file_uploader("2025 Veri Dosyasını Yükleyin (Excel/CSV)", type=["xlsx", "csv"], key="2025")
-file_2026 = st.sidebar.file_uploader("2026 Veri Dosyasını Yükleyin (Excel/CSV)", type=["xlsx", "csv"], key="2026")
-
-if file_2025 and file_2026:
-    # Verileri Oku
+def to_num(v) -> float:
+    if isinstance(v, (int, float, np.number)):
+        return 0.0 if pd.isna(v) else float(v)
+    if v is None:
+        return 0.0
+    s = str(v).replace("₺", "").replace("TL", "").replace("\xa0", "").replace(" ", "").strip()
+    if s in ("", "-", "nan", "NaN"):
+        return 0.0
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".") if s.count(",") == 1 else s.replace(",", "")
+    elif re.fullmatch(r"-?\d{1,3}(\.\d{3})+", s):
+        s = s.replace(".", "")
     try:
-        df_2025 = pd.read_excel(file_2025) if file_2025.name.endswith(".xlsx") else pd.read_csv(file_2025)
-        df_2026 = pd.read_excel(file_2026) if file_2026.name.endswith(".xlsx") else pd.read_csv(file_2026)
-    except Exception as e:
-        st.error(f"Dosya okunurken bir hata oluştu: {e}")
-        st.stop()
+        return float(s)
+    except ValueError:
+        return 0.0
 
-    # Sütun Eşleştirme (Yanlış sütun adı kaynaklı kilitlenmeyi önler)
-    st.sidebar.subheader("⚙️ Sütun Eşleştirme")
-    cols = list(df_2026.columns)
+def tr_num(x, dec=0) -> str:
+    if x is None or pd.isna(x):
+        return "0"
+    s = f"{float(x):,.{dec}f}"
+    return s.replace(",", "X").replace(".", ",").replace("X", ".")
+
+def fmt_tl(x) -> str:
+    return tr_num(x, dec=2) + " ₺"
+
+def fmt_palet(x) -> str:
+    return tr_num(x, dec=0)
+
+def pct(a, b):
+    return (b - a) / a * 100 if a and a != 0 else None
+
+def to_excel(sheets: dict) -> bytes:
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        for name, d in sheets.items():
+            d.to_excel(w, sheet_name=name[:31], index=False)
+    return buf.getvalue()
+
+# ===================================================================
+# Excel Parsing (Genel Veri Okuma)
+# ===================================================================
+@st.cache_data(show_spinner=False)
+def get_sheet_names(file_bytes: bytes):
+    return pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl").sheet_names
+
+@st.cache_data(show_spinner=False)
+def get_raw(file_bytes: bytes, sheet: str) -> pd.DataFrame:
+    return pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet, header=None, engine="openpyxl")
+
+def find_metric(n: str):
+    if "PALET" in n:
+        return "Palet"
+    if re.search(r"CIRO|TUTAR|\bTL\b|TRY|GELIR|SATIS", n):
+        return "Ciro"
+    return None
+
+@st.cache_data(show_spinner=False)
+def parse_general_sheet(file_bytes: bytes, sheet: str, default_year: int) -> pd.DataFrame:
+    raw = get_raw(file_bytes, sheet)
     
-    col_musteri = st.sidebar.selectbox("Müşteri Adı Sütunu", cols, index=0)
-    col_ciro = st.sidebar.selectbox("Ciro Sütunu", cols, index=1 if len(cols)>1 else 0)
-    col_palet = st.sidebar.selectbox("Palet Sütunu", cols, index=2 if len(cols)>2 else 0)
+    # Sütunlarda Ciro/Palet/Yıl bulma
+    metric_cols = {}
+    for j in range(raw.shape[1]):
+        col_text = " ".join([str(v) for v in raw.iloc[:10, j] if pd.notna(v)])
+        n = norm(col_text)
+        met = find_metric(n)
+        if met:
+            ym = re.search(r"(20\d{2})", col_text)
+            yr = int(ym.group(1)) if ym else default_year
+            metric_cols[j] = (met, yr)
+            
+    if not metric_cols:
+        return pd.DataFrame()
+        
+    # Müşteri sütununu tespit etme
+    cust_col = 0
+    for j in range(raw.shape[1]):
+        if j in metric_cols:
+            continue
+        vals = raw.iloc[5:, j].dropna().astype(str)
+        if len(vals) > 0 and sum(not v.replace('.', '').isdigit() for v in vals) / len(vals) > 0.5:
+            cust_col = j
+            break
 
-    # Veriyi Genel Bazda İşle
-    df_genel = hazirla_genel_veri(df_2025, df_2026, col_musteri, col_ciro, col_palet)
+    records = []
+    for r in range(5, len(raw)):
+        c_name = str(raw.iat[r, cust_col]).strip() if pd.notna(raw.iat[r, cust_col]) else ""
+        if not c_name or "TOPLAM" in norm(c_name) or c_name.lower() in ("nan", "none"):
+            continue
+            
+        for j, (met, yr) in metric_cols.items():
+            val = to_num(raw.iat[r, j])
+            records.append({"Müşteri": c_name, "Yıl": yr, "Metrik": met, "Değer": val})
+            
+    if not records:
+        return pd.DataFrame()
+        
+    df_long = pd.DataFrame(records)
+    piv = df_long.pivot_table(index=["Müşteri", "Yıl"], columns="Metrik", values="Değer", aggfunc="sum", fill_value=0.0).reset_index()
+    if "Ciro" not in piv: piv["Ciro"] = 0.0
+    if "Palet" not in piv: piv["Palet"] = 0.0
+    return piv
 
-    # Toplamlar
-    tot_ciro_25 = df_genel["CIRO_2025"].sum()
-    tot_ciro_26 = df_genel["CIRO_2026"].sum()
-    tot_palet_25 = df_genel["PALET_2025"].sum()
-    tot_palet_26 = df_genel["PALET_2026"].sum()
+# ===================================================================
+# Streamlit Arayüz
+# ===================================================================
+ss = st.session_state
+ss.setdefault("file_bytes", None)
+ss.setdefault("file_name", None)
 
-    palet_basi_25 = tot_ciro_25 / tot_palet_25 if tot_palet_25 > 0 else 0
-    palet_basi_26 = tot_ciro_26 / tot_palet_26 if tot_palet_26 > 0 else 0
+st.title("📊 Genel Ciro, Bütçe Raporlama & Hedef Sunum Portalı")
+st.sidebar.header("📁 Rapor Yükleme")
 
-    # ------------------------------------------
-    # BÖLÜM 1: GENEL PERFORMANS KARTLARI
-    # ------------------------------------------
-    st.subheader("📈 2025 - 2026 Genel Toplam Özeti")
-    c1, c2, c3 = st.columns(3)
+up = st.sidebar.file_uploader("Excel Dosyasını Yükleyin (.xlsx)", type=["xlsx"])
+if up is not None:
+    ss["file_bytes"] = up.getvalue()
+    ss["file_name"] = up.name
 
-    with c1:
-        st.metric("2025 Toplam Ciro", format_tl(tot_ciro_25))
-        st.metric("2026 Toplam Ciro", format_tl(tot_ciro_26), delta=format_tl(tot_ciro_26 - tot_ciro_25))
+default_year = st.sidebar.number_input("Varsayılan Yıl", 2020, 2035, 2026)
 
-    with c2:
-        st.metric("2025 Toplam Palet", format_palet(tot_palet_25))
-        st.metric("2026 Toplam Palet", format_palet(tot_palet_26), delta=format_palet(tot_palet_26 - tot_palet_25))
+if ss["file_bytes"] is None:
+    st.info("👈 Başlamak için sol taraf menüden 2025/2026 verilerinizi içeren Excel dosyasını yükleyin.")
+    st.stop()
 
-    with c3:
-        st.metric("2025 Ort. Palet Başı Ciro", format_tl(palet_basi_25))
-        st.metric("2026 Ort. Palet Başı Ciro", format_tl(palet_basi_26), delta=format_tl(palet_basi_26 - palet_basi_25))
+FB = ss["file_bytes"]
+sheet_names = get_sheet_names(FB)
+sheet = st.sidebar.selectbox("Analiz Edilecek Sayfa:", sheet_names)
 
-    st.markdown("---")
+df_all = parse_general_sheet(FB, sheet, int(default_year))
 
-    # ------------------------------------------
-    # BÖLÜM 2: TOP 20 MÜŞTERİ & PASTA GRAFİKLER
-    # ------------------------------------------
-    st.subheader("🎯 En Yüksek Ciro Getiren 20 Müşteri Analizi")
+if df_all.empty:
+    st.error("Seçilen sayfada uygun Ciro/Palet verisi ayrıştırılamadı.")
+    st.stop()
+
+# ===================================================================
+# GENEL RAKAMLAR VE İLK 20 MÜŞTERİ ANALİZİ
+# ===================================================================
+st.header("📈 Genel Ciro & Palet Performans Özeti")
+
+years = sorted(df_all["Yıl"].unique())
+sel_year = st.selectbox("🎯 Analiz Edilecek Yılı Seçin:", years, index=len(years)-1)
+
+df_year = df_all[df_all["Yıl"] == sel_year].copy()
+
+# En yüksek cirolu 20 Müşteriyi Filtreleme
+top20_df = df_year.sort_values("Ciro", ascending=False).head(20).copy()
+top20_df["Palet Başına TL"] = top20_df.apply(lambda r: (r["Ciro"] / r["Palet"]) if r["Palet"] > 0 else 0.0, axis=1)
+
+# Genel Metrik Kartları
+genel_ciro = top20_df["Ciro"].sum()
+genel_palet = top20_df["Palet"].sum()
+ort_palet_tl = (genel_ciro / genel_palet) if genel_palet > 0 else 0.0
+
+c1, c2, c3 = st.columns(3)
+c1.metric(f"{sel_year} Top 20 Toplam Ciro", fmt_tl(genel_ciro))
+c2.metric(f"{sel_year} Top 20 Toplam Palet", fmt_palet(genel_palet))
+c3.metric("Ortalama Palet Başı Ciro (₺/Palet)", fmt_tl(ort_palet_tl))
+
+st.markdown("---")
+st.subheader(f"📋 {sel_year} Yılı En Yüksek Cirolu 20 Müşteri Tablosu")
+
+st.dataframe(
+    top20_df,
+    use_container_width=True,
+    hide_index=True,
+    column_config={
+        "Müşteri": st.column_config.TextColumn("Müşteri Adı", width="large"),
+        "Yıl": st.column_config.NumberColumn("Yıl", format="%d"),
+        "Ciro": st.column_config.NumberColumn("Toplam Ciro (₺)", format="%.2f ₺"),
+        "Palet": st.column_config.NumberColumn("Toplam Palet", format="%.0f"),
+        "Palet Başına TL": st.column_config.NumberColumn("Palet Başı Ort. TL", format="%.2f ₺")
+    }
+)
+
+# ===================================================================
+# PASTA GRAFİKLER & PAZAR PAYI
+# ===================================================================
+st.markdown("---")
+st.subheader("🥧 İlk 20 Müşteri Ciro ve Palet Dağılımı (Pasta Grafik)")
+
+g_col1, g_col2 = st.columns(2)
+
+fig_ciro = px.pie(top20_df, values="Ciro", names="Müşteri", title=f"{sel_year} Ciro Dağılımı (Top 20)",
+                  hole=0.3, color_discrete_sequence=px.colors.sequential.RdBu)
+fig_ciro.update_traces(textposition='inside', textinfo='percent+label')
+g_col1.plotly_chart(fig_ciro, use_container_width=True)
+
+fig_palet = px.pie(top20_df, values="Palet", names="Müşteri", title=f"{sel_year} Palet Dağılımı (Top 20)",
+                   hole=0.3, color_discrete_sequence=px.colors.sequential.Blugrn)
+fig_palet.update_traces(textposition='inside', textinfo='percent+label')
+g_col2.plotly_chart(fig_palet, use_container_width=True)
+
+# Yorum Alanı
+st.subheader("💡 Bütçe Raporu ve Sunum Yorumu")
+top1 = top20_df.iloc[0]
+top1_share = (top1["Ciro"] / genel_ciro) * 100 if genel_ciro > 0 else 0
+
+st.info(f"""
+* **Müşteri Konsantrasyonu:** En yüksek ciroyu getiren **{top1['Müşteri']}**, ilk 20 müşteri cirosunun tek başına **%{top1_share:.1f}** kadarını oluşturmaktadır (**{fmt_tl(top1['Ciro'])}**).
+* **Verimlilik Analizi (Palet Başına Ciro):** Toplamda **{fmt_palet(genel_palet)}** palet sevkiyatı yapılmış olup, palet başına elde edilen ortalama gelir **{fmt_tl(ort_palet_tl)}** olarak gerçekleşmiştir.
+* **Karlılık & Verim Odağı:** Palet başı getirisi ortalamanın altında kalan müşterilerde birim fiyat güncellemesi veya operasyonel verimlilik artışı hedeflenebilir.
+""")
+
+# ===================================================================
+# YILLIK KARŞILAŞTIRMA & 2027 HEDEF OLUŞTURUCU
+# ===================================================================
+st.markdown("---")
+st.header("🎯 Yıllık Karşılaştırma & Gelecek Yıl Bütçe Hedef Oluşturucu")
+
+if len(years) >= 2:
+    y_old, y_new = years[0], years[1]
+    df_old = df_all[df_all["Yıl"] == y_old].groupby("Müşteri")[["Ciro", "Palet"]].sum().add_suffix(f"_{y_old}")
+    df_new = df_all[df_all["Yıl"] == y_new].groupby("Müşteri")[["Ciro", "Palet"]].sum().add_suffix(f"_{y_new}")
     
-    df_genel["TOPLAM_CIRO"] = df_genel["CIRO_2025"] + df_genel["CIRO_2026"]
-    top_20 = df_genel.sort_values(by="TOPLAM_CIRO", ascending=False).head(20).copy()
+    cmp_df = df_new.join(df_old, how="left").fillna(0.0).reset_index()
+    cmp_df = cmp_df.sort_values(f"Ciro_{y_new}", ascending=False).head(20) # Sadece top 20
+    
+    cmp_df["Ciro Değişim (%)"] = cmp_df.apply(lambda r: pct(r[f"Ciro_{y_old}"], r[f"Ciro_{y_new}"]), axis=1)
+    
+    st.subheader(f"🔄 {y_old} vs {y_new} İlk 20 Müşteri Karşılaştırması")
+    st.dataframe(cmp_df, use_container_width=True, hide_index=True)
 
-    top_20["TL_PALET_2026"] = np.where(top_20["PALET_2026"] > 0, top_20["CIRO_2026"] / top_20["PALET_2026"], 0)
+# Hedef Verme Ekranı (Top 20 Müşteriye Hedef Simülasyonu)
+st.subheader(f"🚀 Top 20 Müşteri İçin Bütçe Hedefleri Belirleme")
 
-    # Hedef Slider
-    hedef_orani = st.slider("2027 Bütçe Hedef Büyüme Oranı (%)", 0, 100, 15)
-    top_20["2027_HEDEF_CIRO"] = top_20["CIRO_2026"] * (1 + hedef_orani / 100)
+g_grow = st.slider("Genel Hedef Büyüme Oranı (%)", 0, 100, 20, 5)
 
-    # Pasta Grafikler
-    col_g1, col_g2 = st.columns(2)
-    with col_g1:
-        fig_ciro = px.pie(top_20, values="CIRO_2026", names="MUSTERI", title="2026 Top 20 Müşteri Ciro Payı", hole=0.3)
-        st.plotly_chart(fig_ciro, use_container_width=True)
+hed_df = top20_df[["Müşteri", "Ciro", "Palet"]].copy()
+hed_df["Büyüme Hedefi (%)"] = float(g_grow)
 
-    with col_g2:
-        fig_palet = px.pie(top_20, values="PALET_2026", names="MUSTERI", title="2026 Top 20 Müşteri Palet Payı", hole=0.3)
-        st.plotly_chart(fig_palet, use_container_width=True)
+edited_target = st.data_editor(
+    hed_df,
+    hide_index=True,
+    use_container_width=True,
+    disabled=["Müşteri", "Ciro", "Palet"],
+    column_config={
+        "Ciro": st.column_config.NumberColumn(f"Mevcut Ciro ({sel_year})", format="%.2f ₺"),
+        "Palet": st.column_config.NumberColumn(f"Mevcut Palet ({sel_year})", format="%.0f"),
+        "Büyüme Hedefi (%)": st.column_config.NumberColumn("Hedef Büyüme (%)", format="%.1f %%")
+    }
+)
 
-    # Tablo Gösterimi
-    tablo = top_20[["MUSTERI", "CIRO_2025", "CIRO_2026", "PALET_2025", "PALET_2026", "TL_PALET_2026", "2027_HEDEF_CIRO"]].copy()
-    tablo["CIRO_2025"] = tablo["CIRO_2025"].apply(format_tl)
-    tablo["CIRO_2026"] = tablo["CIRO_2026"].apply(format_tl)
-    tablo["PALET_2025"] = tablo["PALET_2025"].apply(format_palet)
-    tablo["PALET_2026"] = tablo["PALET_2026"].apply(format_palet)
-    tablo["TL_PALET_2026"] = tablo["TL_PALET_2026"].apply(format_tl)
-    tablo["2027_HEDEF_CIRO"] = tablo["2027_HEDEF_CIRO"].apply(format_tl)
+edited_target["Yeni Hedef Ciro (₺)"] = edited_target["Ciro"] * (1 + edited_target["Büyüme Hedefi (%)"] / 100)
+edited_target["Yeni Hedef Palet"] = edited_target["Palet"] * (1 + edited_target["Büyüme Hedefi (%)"] / 100)
 
-    st.dataframe(tablo, use_container_width=True)
+t_ciro = edited_target["Yeni Hedef Ciro (₺)"].sum()
+t_palet = edited_target["Yeni Hedef Palet"].sum()
 
-    st.markdown("---")
+st.success(f"🎯 **Bütçelenen Toplam Yeni Ciro:** {fmt_tl(t_ciro)} | **Toplam Hedef Palet:** {fmt_palet(t_palet)}")
 
-    # ------------------------------------------
-    # BÖLÜM 3: ARTAN VE DÜŞEN MÜŞTERİLER
-    # ------------------------------------------
-    st.subheader("🔥 Genel Ciro Değişim Değerlendirmesi")
-    col_inc, col_dec = st.columns(2)
-
-    artan_5 = df_genel.sort_values(by="CIRO_DEGISIM", ascending=False).head(5)
-    dusan_5 = df_genel.sort_values(by="CIRO_DEGISIM", ascending=True).head(5)
-
-    with col_inc:
-        st.success("🟢 Cirosu En Çok Artan 5 Müşteri")
-        for _, r in artan_5.iterrows():
-            st.write(f"**{r['MUSTERI']}**: +{format_tl(r['CIRO_DEGISIM'])} *(2026 Toplam: {format_tl(r['CIRO_2026'])})*")
-
-    with col_dec:
-        st.error("🔴 Cirosu En Çok Düşen 5 Müşteri")
-        for _, r in dusan_5.iterrows():
-            st.write(f"**{r['MUSTERI']}**: {format_tl(r['CIRO_DEGISIM'])} *(2026 Toplam: {format_tl(r['CIRO_2026'])})*")
-
-    st.markdown("---")
-
-    # ------------------------------------------
-    # BÖLÜM 4: SUNUM İÇİN YÖNETİCİ NOTLARI
-    # ------------------------------------------
-    st.subheader("📝 Sunum İçin Otomatik Analiz Notları")
-    top20_pay = (top_20["CIRO_2026"].sum() / tot_ciro_26 * 100) if tot_ciro_26 > 0 else 0
-    palet_degisim = ((palet_basi_26 - palet_basi_25) / palet_basi_25 * 100) if palet_basi_25 > 0 else 0
-
-    st.info(f"""
-    * **Müşteri Yoğunlaşması:** İlk 20 müşteri, 2026 yılı toplam cironun **%{top20_pay:.1f}** kısmını oluşturmaktadır.
-    * **Palet Başı Verimlilik:** Palet başına ortalama ciro 2025'te **{format_tl(palet_basi_25)}** iken 2026'da **{format_tl(palet_basi_26)}** olmuştur (Değişim: **%{palet_degisim:.1f}**).
-    * **Aksiyon Notu:** En fazla artış sağlanan **{artan_5.iloc[0]['MUSTERI']}** ivmesi sürdürülmeli, en fazla düşüş yaşayan **{dusan_5.iloc[0]['MUSTERI']}** müşterisi ile tekrar görüşülmelidir.
-    """)
-
-else:
-    st.warning("👈 Lütfen analizin başlayabilmesi için sol taraftaki menüden 2025 ve 2026 Excel/CSV dosyalarınızı yükleyin.")
+st.download_button(
+    "⬇️ Bütçe Raporunu Excel Olarak İndir",
+    to_excel({"Top 20 Müşteri Genel": top20_df, "Gelecek Yıl Bütçe Hedefleri": edited_target}),
+    file_name="Butce_Raporu_Top20.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
