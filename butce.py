@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import io
 
 # Sayfa Yapılandırması
 st.set_page_config(
@@ -12,11 +13,34 @@ st.set_page_config(
 
 st.title("📊 Bütçeleme, Ciro Analizi ve Hedefleme Portalı")
 
-# Yan Menü: Dosya Yükleme ve Mod Seçimi
+# -------------------------------------------------------------------
+# 1. SESSION STATE (OTURUM DURUMU) KONTROLÜ
+# -------------------------------------------------------------------
+if "uploaded_file_bytes" not in st.session_state:
+    st.session_state["uploaded_file_bytes"] = None
+if "uploaded_file_name" not in st.session_state:
+    st.session_state["uploaded_file_name"] = None
+
+# Yan Menü: Dosya Yükleme & Modlar
 st.sidebar.header("📁 Veri Yükleme & Modlar")
 
-# Excel Dosya Yükleyici
-uploaded_file = st.sidebar.file_uploader("Excel Raporunu Yükleyin (.xlsx)", type=["xlsx", "xls"])
+new_file = st.sidebar.file_uploader(
+    "Excel Raporunu Yükleyin (.xlsx)", 
+    type=["xlsx", "xls"],
+    key="excel_uploader"
+)
+
+# Yeni bir dosya yüklendiğinde session_state'i güncelle
+if new_file is not None:
+    st.session_state["uploaded_file_bytes"] = new_file.getvalue()
+    st.session_state["uploaded_file_name"] = new_file.name
+
+# Yüklü dosyayı kaldırmak/temizlemek için buton
+if st.session_state["uploaded_file_bytes"] is not None:
+    if st.sidebar.button("🗑️ Yüklü Dosyayı Kaldır / Yenile"):
+        st.session_state["uploaded_file_bytes"] = None
+        st.session_state["uploaded_file_name"] = None
+        st.rerun()
 
 mode = st.sidebar.radio(
     "Çalışma Modunu Seçin:",
@@ -28,17 +52,23 @@ mode = st.sidebar.radio(
     ]
 )
 
-# KISA KONTROL: Dosya yüklenmediyse uyarı ver ve koda devam etme
-if uploaded_file is None:
-    st.info("👈 Lütfen başlamak için sol taraftaki menüden Excel ciro raporu dosyanızı yükleyin.")
-    st.stop()  # Hata oluşmasını engeller ve dosya yüklenene kadar bekler
+# -------------------------------------------------------------------
+# 2. DOSYA KONTROLÜ VE AKTİF DOSYA GÖSTERGESİ
+# -------------------------------------------------------------------
+if st.session_state["uploaded_file_bytes"] is None:
+    st.info("👈 Lütfen analizlere başlamak için sol taraftaki menüden Excel ciro raporu dosyanızı yükleyin.")
+    st.stop()
+else:
+    # Kullanılan dosyayı üst kısımda şık bir kutuda göster
+    st.success(f"📌 **Aktif Kullanılan Dosya:** `{st.session_state['uploaded_file_name']}`")
 
-# Dosya yüklendiyse sayfaları oku
+# Hafızadaki dosyayı okuma
 try:
-    xls = pd.ExcelFile(uploaded_file)
+    file_bytes = io.BytesIO(st.session_state["uploaded_file_bytes"])
+    xls = pd.ExcelFile(file_bytes, engine="openpyxl")
     sheet_names = xls.sheet_names
 except Exception as e:
-    st.error(f"Excel dosyası okunurken bir hata oluştu: {e}")
+    st.error(f"Excel dosyası okunamadı. Lütfen geçerli bir .xlsx dosyası yüklediğinizden emin olun. Detay: {e}")
     st.stop()
 
 # -------------------------------------------------------------------
@@ -48,7 +78,7 @@ if mode == "📈 2026 Ciro Analizi (Aylık Karşılaştırma)":
     st.header("📈 2026 Ciro & Palet Analizi (Aylar Arası Karşılaştırma)")
     
     ciro_sheet = st.selectbox("Ciro Analizi Sayfasını Seçin:", sheet_names, index=0)
-    df_ciro = pd.read_excel(uploaded_file, sheet_name=ciro_sheet)
+    df_ciro = pd.read_excel(file_bytes, sheet_name=ciro_sheet, engine="openpyxl")
     
     aylar = ["OCAK", "ŞUBAT", "MART", "NİSAN", "MAYIS", "HAZİRAN", "TEMMUZ", "AĞUSTOS", "EYLÜL", "EKİM", "KASIM", "ARALIK"]
     
@@ -111,7 +141,7 @@ elif mode == "🎯 2025 - 2026 Hedef Karşılaştırması":
     st.header("🎯 2025 Gerçekleşen vs 2026 Hedef & Gerçekleşen")
     
     hedef_sheet = st.selectbox("Hedef Sayfasını Seçin:", sheet_names, index=min(1, len(sheet_names)-1))
-    df_hedef = pd.read_excel(uploaded_file, sheet_name=hedef_sheet)
+    df_hedef = pd.read_excel(file_bytes, sheet_name=hedef_sheet, engine="openpyxl")
     
     st.write("📋 **Hedef Tablosu Önizleme:**")
     st.dataframe(df_hedef.head(10))
