@@ -19,7 +19,6 @@ _TR = str.maketrans("İıŞşĞğÜüÖöÇç", "IISSGGUUOOCC")
 
 
 def norm(x) -> str:
-    """Türkçe karakterleri sadeleştirip BÜYÜK harfe çevirir."""
     if x is None or (not isinstance(x, (list, tuple)) and pd.isna(x)):
         return ""
     return str(x).translate(_TR).upper().strip()
@@ -285,7 +284,7 @@ def pot_totals():
 # ===================================================================
 # YAN MENÜ & DOSYA YÜKLEME
 # ===================================================================
-st.title("📊 Bütçeleme, Ciro Analizi ve Hedefleme Portalı")
+st.title("📊 Bütçeleme, Ciro Analizi ve Akıllı Trend Portalı")
 st.sidebar.header("📁 Veri Yükleme & Modlar")
 
 up = st.sidebar.file_uploader("Excel Raporunu Yükleyin (.xlsx)", type=["xlsx"],
@@ -339,7 +338,7 @@ def load_parsed(label, default_idx):
 # MOD 1 — AYLIK VE GENEL CİRO ANALİZİ
 # ===================================================================
 if mode.startswith("📈"):
-    st.header("📈 Ciro & Palet Analizi")
+    st.header("📈 Ciro & Palet Analizi (Akıllı Müşteri Trendleri)")
     df = load_parsed("Ciro Analizi Sayfası:", find_sheet(sheet_names, ("PALET", "CIRO"), ("2026",)))
     data = df[df["Tür"] == "Gerçekleşen"]
     if data.empty:
@@ -351,23 +350,97 @@ if mode.startswith("📈"):
     year = c0.selectbox("Yıl Seçin:", years, index=len(years) - 1)
 
     tot = data[data["Yıl"] == year].groupby("Ay")[["Palet", "Ciro"]].sum().reindex(range(1, 13), fill_value=0)
-
-    # En son veri olan ayı bulma
     last_active_month = max([i + 1 for i in range(12) if tot["Ciro"].iloc[i] > 0 or tot["Palet"].iloc[i] > 0], default=1)
 
-    tab_aylik, tab_genel = st.tabs(["🔄 İki Ay Karşılaştırma", "🌐 Genel Tablo (Ocak - Gelinen Ay)"])
+    # Karşılaştırma Seçenekleri
+    pairs = ["🌐 Genel (Yıl Başı - Gelinen Ay)"] + [f"{AYLAR[i]} vs {AYLAR[i + 1]}" for i in range(11)]
+    default_pair_idx = min(last_active_month - 1, 11) if last_active_month >= 2 else 0
+
+    selected_period = st.selectbox("📅 Karşılaştırılacak Dönem Veya Analiz Modu Seçin:", pairs, index=default_pair_idx)
 
     # ---------------------------------------------------------------
-    # SEKMESİ 1: İKİ AY KARŞILAŞTIRMASI (Örn: Eylül vs Ekim)
+    # DURUM A: "🌐 Genel (Yıl Başı - Gelinen Ay)" SEÇİLİRSE
     # ---------------------------------------------------------------
-    with tab_aylik:
-        pairs = [f"{AYLAR[i]} → {AYLAR[i + 1]}" for i in range(11)]
-        default_pair_idx = min(last_active_month - 2, 10) if last_active_month >= 2 else 0
-        pair = st.selectbox("Karşılaştırılacak İki Dönem Seçin:", pairs, index=default_pair_idx)
-        pi = pairs.index(pair)
+    if selected_period.startswith("🌐"):
+        st.subheader(f"🌐 {year} Yılı Genel Tablo (Ocak → {AYLAR[last_active_month - 1]})")
+
+        ytd_data = data[(data["Yıl"] == year) & (data["Ay"] <= last_active_month)]
+
+        # 1. HER AYI YAN YANA SÜTUN OLARAK GÖSTEREN MATRIX
+        st.write(f"### 📋 Müşteri Bazında Aylık Ciro Matrix'i (Ocak - {AYLAR[last_active_month - 1]})")
+
+        piv_ciro = ytd_data.pivot_table(index="Müşteri", columns="Ay", values="Ciro", aggfunc="sum", fill_value=0.0)
+        piv_ciro.columns = [f"{AYLAR[m - 1]} Ciro" for m in piv_ciro.columns]
+        piv_ciro["Toplam Ciro (₺)"] = piv_ciro.sum(axis=1)
+        piv_ciro = piv_ciro.sort_values("Toplam Ciro (₺)", ascending=False).reset_index()
+
+        cfg_ciro = {"Müşteri": st.column_config.TextColumn("Müşteri", width="medium")}
+        for col in piv_ciro.columns:
+            if col != "Müşteri":
+                cfg_ciro[col] = st.column_config.NumberColumn(col, format="%.2f ₺")
+
+        st.dataframe(piv_ciro, use_container_width=True, hide_index=True, column_config=cfg_ciro)
+
+        st.write(f"### 📦 Müşteri Bazında Aylık Palet Matrix'i (Ocak - {AYLAR[last_active_month - 1]})")
+        piv_palet = ytd_data.pivot_table(index="Müşteri", columns="Ay", values="Palet", aggfunc="sum", fill_value=0.0)
+        piv_palet.columns = [f"{AYLAR[m - 1]} Palet" for m in piv_palet.columns]
+        piv_palet["Toplam Palet"] = piv_palet.sum(axis=1)
+        piv_palet = piv_palet.sort_values("Toplam Palet", ascending=False).reset_index()
+
+        cfg_palet = {"Müşteri": st.column_config.TextColumn("Müşteri", width="medium")}
+        for col in piv_palet.columns:
+            if col != "Müşteri":
+                cfg_palet[col] = st.column_config.NumberColumn(col, format="%.0f")
+
+        st.dataframe(piv_palet, use_container_width=True, hide_index=True, column_config=cfg_palet)
+
+        # 2. GENEL TREND GRAFİĞİ
+        st.markdown("---")
+        st.write("### 📉 Genel Aylık Ciro ve Palet Trendi (Noktasal & Çizgili)")
+        aylik_toplamlar = ytd_data.groupby("Ay")[["Ciro", "Palet"]].sum().reindex(range(1, last_active_month + 1), fill_value=0).reset_index()
+        aylik_toplamlar["Ay Adı"] = aylik_toplamlar["Ay"].map(lambda x: AYLAR[x - 1])
+
+        fig_g = go.Figure()
+        fig_g.add_trace(go.Scatter(x=aylik_toplamlar["Ay Adı"], y=aylik_toplamlar["Ciro"],
+                                   mode="lines+markers+text", name="Ciro (₺)",
+                                   line=dict(color="#2CA02C", width=3),
+                                   marker=dict(size=10),
+                                   text=[fmt_tl(v) for v in aylik_toplamlar["Ciro"]],
+                                   textposition="top center"))
+
+        fig_g.update_layout(title="Yıl Başı Gelinen Aya Kadar Aylık Ciro Gelişimi", yaxis_title="Ciro (₺)")
+        st.plotly_chart(fig_g, use_container_width=True)
+
+        # 3. YAZILIMSAL AKILLI YORUMLAR (GENEL MÜŞTERİ YORUMU)
+        st.subheader("💡 Sistem Yorumu & Trend Analizi")
+
+        top_cust = piv_ciro.iloc[0]["Müşteri"] if len(piv_ciro) else "-"
+        top_val = piv_ciro.iloc[0]["Toplam Ciro (₺)"] if len(piv_ciro) else 0
+
+        # Israrla Düşen Müşteriler (Son 3 ay düşüşte olanlar)
+        persistent_drop = []
+        if last_active_month >= 3:
+            m1_col, m2_col, m3_col = AYLAR[last_active_month - 3], AYLAR[last_active_month - 2], AYLAR[last_active_month - 1]
+            p_raw = ytd_data.pivot_table(index="Müşteri", columns="Ay", values="Ciro", aggfunc="sum", fill_value=0)
+            for cust_name, r in p_raw.iterrows():
+                if r.get(last_active_month - 2, 0) > 0:
+                    if r.get(last_active_month - 2, 0) < r.get(last_active_month - 3, 0) and r.get(last_active_month - 1, 0) < r.get(last_active_month - 2, 0):
+                        persistent_drop.append(cust_name)
+
+        st.info(f"""
+        * **En Yüksek Katkı Veren Müşteri:** Yıl başından itibaren **{top_cust}** firması toplam **{fmt_tl(top_val)}** ciro ile ilk sırada yer almaktadır.
+        * **Trend Gidişatı:** {year} yılında **{AYLAR[last_active_month - 1]}** ayına kadar toplam **{fmt_tl(aylik_toplamlar['Ciro'].sum())}** ciro ve **{tr_num(aylik_toplamlar['Palet'].sum())}** palet hacmine ulaşıldı.
+        """ + (f"\n* **🚨 Israrla Gerileyen Müşteriler:** Son 3 aydır cirosu sürekli düşüş eğiliminde olan müşteriler: **{', '.join(persistent_drop)}**. Bu firmalar ile iletişime geçilmesi önerilir." if persistent_drop else "\n* **Müşteri Stabilizasyonu:** Son 3 ayda sürekli gerileyen belirgin bir müşteri grubu tespit edilmemiştir."))
+
+    # ---------------------------------------------------------------
+    # DURUM B: İKİ AY KARŞILAŞTIRMASI SEÇİLİRSE (Örn: Kasım vs Aralık)
+    # ---------------------------------------------------------------
+    else:
+        pi = pairs.index(selected_period) - 1
         pm, cm = pi + 1, pi + 2
 
-        # Önceki Ay ve Şu Anki Ay için Müşteri Bazlı Toplamlar
+        st.subheader(f"📊 {AYLAR[pm - 1]} vs {AYLAR[cm - 1]} {year} Detaylı Karşılaştırması")
+
         a = data[(data["Yıl"] == year) & (data["Ay"] == pm)].groupby("Müşteri")[["Palet", "Ciro"]].sum().add_suffix(f" ({AYLAR[pm - 1]})")
         b = data[(data["Yıl"] == year) & (data["Ay"] == cm)].groupby("Müşteri")[["Palet", "Ciro"]].sum().add_suffix(f" ({AYLAR[cm - 1]})")
 
@@ -383,27 +456,12 @@ if mode.startswith("📈"):
         cmp_df["Palet Farkı"] = cmp_df[col_p_curr] - cmp_df[col_p_prev]
         cmp_df["Palet Değişim (%)"] = cmp_df.apply(lambda r: pct(r[col_p_prev], r[col_p_curr]), axis=1)
 
-        # Durum belirleme (Artış, Düşüş, Yeni, Kayıp)
-        def calc_status(r):
-            if r[col_c_prev] == 0 and r[col_c_curr] > 0:
-                return "🟢 Yeni Müşteri"
-            if r[col_c_prev] > 0 and r[col_c_curr] == 0:
-                return "🔴 Kaybedilen Müşteri"
-            if r["Ciro Farkı (₺)"] > 0:
-                return "🟢 Artış"
-            if r["Ciro Farkı (₺)"] < 0:
-                return "🔴 Düşüş"
-            return "⚪ Değişmedi"
-
-        cmp_df["Durum"] = cmp_df.apply(calc_status, axis=1)
-
         tot_c_prev = tot["Ciro"][pm]
         tot_c_curr = tot["Ciro"][cm]
         tot_p_prev = tot["Palet"][pm]
         tot_p_curr = tot["Palet"][cm]
 
-        st.subheader(f"📊 {AYLAR[pm - 1]} vs {AYLAR[cm - 1]} {year} Karşılaştırma Özeti")
-
+        # Üst Özet Kartları
         k1, k2, k3, k4 = st.columns(4)
         k1.metric(f"Ciro ({AYLAR[pm - 1]})", fmt_tl(tot_c_prev))
         k2.metric(f"Ciro ({AYLAR[cm - 1]})", fmt_tl(tot_c_curr),
@@ -413,4 +471,288 @@ if mode.startswith("📈"):
                   f"%{pct(tot_p_prev, tot_p_curr):.1f}" if pct(tot_p_prev, tot_p_curr) is not None else None)
 
         st.markdown("---")
-        st.write(f"### 📋 Müşteri Bazlı Detaylı Dön
+
+        # 1. AKILLI MÜŞTERİ YORUMU VE BELİRGİN DÜŞÜŞ TESPİTİ
+        st.write("### 💡 Otomatik Müşteri Trendi ve Analiz Yorumu")
+
+        # Ciddi Düşüş Gösteren Müşteriler (%25+ düşüş veya 10.000 TL üzeri azalma)
+        significant_drops = cmp_df[
+            (cmp_df[col_c_prev] >= 5000) &
+            ((cmp_df["Ciro Değişim (%)"] <= -25) | (cmp_df["Ciro Farkı (₺)"] <= -10000))
+        ].sort_values("Ciro Farkı (₺)")
+
+        # Ciddi Artış Gösterenler
+        significant_gains = cmp_df[
+            (cmp_df["Ciro Farkı (₺)"] >= 10000) | (cmp_df["Ciro Değişim (%)"] >= 30)
+        ].sort_values("Ciro Farkı (₺)", ascending=False)
+
+        if not significant_drops.empty:
+            st.warning(f"⚠️ **{AYLAR[pm - 1]} → {AYLAR[cm - 1]} Döneminde Belirgin Düşüş Gösteren Müşteriler:**")
+            for _, r in significant_drops.head(5).iterrows():
+                st.write(f"- 🔴 **{r['Müşteri']}**: {AYLAR[pm - 1]} ayında **{fmt_tl(r[col_c_prev])}** ciro yaparken, {AYLAR[cm - 1]} ayında **{fmt_tl(r[col_c_curr])}** seviyesine düştü. (Fark: **{fmt_tl(r['Ciro Farkı (₺)'])}**, Değişim: **%{r['Ciro Değişim (%)']:.1f}**)")
+        else:
+            st.success(f"✅ {AYLAR[pm - 1]} ayından {AYLAR[cm - 1]} ayına geçişte kritik düzeyde yüksek düşüş gösteren müşteri bulunmuyor.")
+
+        st.markdown("---")
+        st.write(f"### 📋 Müşteri Bazlı Detaylı Tablo ({AYLAR[pm - 1]} vs {AYLAR[cm - 1]})")
+
+        st.dataframe(
+            cmp_df.sort_values(col_c_curr, ascending=False),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Müşteri": st.column_config.TextColumn("Müşteri", width="medium"),
+                col_c_prev: st.column_config.NumberColumn(f"{AYLAR[pm - 1]} Ciro", format="%.2f ₺"),
+                col_c_curr: st.column_config.NumberColumn(f"{AYLAR[cm - 1]} Ciro", format="%.2f ₺"),
+                "Ciro Farkı (₺)": st.column_config.NumberColumn("Ciro Farkı", format="%.2f ₺"),
+                "Ciro Değişim (%)": st.column_config.NumberColumn("Ciro Değişim", format="%.1f %%"),
+                col_p_prev: st.column_config.NumberColumn(f"{AYLAR[pm - 1]} Palet", format="%.0f"),
+                col_p_curr: st.column_config.NumberColumn(f"{AYLAR[cm - 1]} Palet", format="%.0f"),
+                "Palet Farkı": st.column_config.NumberColumn("Palet Farkı", format="%.0f"),
+                "Palet Değişim (%)": st.column_config.NumberColumn("Palet Değişim", format="%.1f %%")
+            }
+        )
+
+        st.markdown("---")
+        # 2. İKİ DÖNEM GÖRSEL GRAFİĞİ
+        st.write(f"### 📉 En Yüksek Ciroya Sahip 10 Müşterinin {AYLAR[pm - 1]} & {AYLAR[cm - 1]} Noktasal Karşılaştırması")
+        top10 = cmp_df.nlargest(10, col_c_curr)
+
+        fig_dot = go.Figure()
+        fig_dot.add_trace(go.Scatter(
+            x=top10["Müşteri"], y=top10[col_c_prev],
+            mode="markers+lines", name=AYLAR[pm - 1],
+            marker=dict(size=12, color="#FFA15A")
+        ))
+        fig_dot.add_trace(go.Scatter(
+            x=top10["Müşteri"], y=top10[col_c_curr],
+            mode="markers+lines", name=AYLAR[cm - 1],
+            marker=dict(size=12, color="#00CC96")
+        ))
+        fig_dot.update_layout(title=f"Müşteri Ciro Değişimi ({AYLAR[pm - 1]} vs {AYLAR[cm - 1]})", yaxis_title="Ciro (₺)")
+        st.plotly_chart(fig_dot, use_container_width=True)
+
+# ===================================================================
+# MOD 2 — 2025 / 2026 HEDEF KARŞILAŞTIRMASI
+# ===================================================================
+elif mode.startswith("🎯"):
+    st.header("🎯 Yıllar Arası Karşılaştırma: Gerçekleşen & Hedef")
+    df = load_parsed("Hedef Sayfası:", find_sheet(sheet_names, ("HEDEF",), ("2026",)))
+    years = sorted(df["Yıl"].unique().tolist())
+    if len(years) < 2:
+        st.warning(f"Sayfada tek yıl algılandı: {years}. Başlıklarda yıl (2025, 2026) yazmalı.")
+    c1, c2 = st.columns(2)
+    y_base = c1.selectbox("Baz Yıl:", years, index=max(0, len(years) - 2))
+    y_cmp = c2.selectbox("Karşılaştırılan Yıl:", years, index=len(years) - 1)
+
+    for met in ("Ciro", "Palet"):
+        st.subheader(f"{'💰' if met == 'Ciro' else '📦'} {met} Karşılaştırması")
+        series = {
+            f"{y_base} Gerçekleşen": monthly_series(df, y_base, "Gerçekleşen", met),
+            f"{y_base} Hedef": monthly_series(df, y_base, "Hedef", met),
+            f"{y_cmp} Hedef": monthly_series(df, y_cmp, "Hedef", met),
+            f"{y_cmp} Gerçekleşen": monthly_series(df, y_cmp, "Gerçekleşen", met),
+        }
+        series = {k: v for k, v in series.items() if v is not None}
+        if not series:
+            st.info("Veri bulunamadı.")
+            continue
+        table = pd.DataFrame(series)
+        table.insert(0, "Ay", AYLAR)
+
+        fig = go.Figure([go.Bar(name=k, x=AYLAR, y=v.values) for k, v in series.items()])
+        fig.update_layout(barmode="group", title=f"Aylık {met}")
+        st.plotly_chart(fig, use_container_width=True)
+
+        ba, ca, ch = (series.get(f"{y_base} Gerçekleşen"), series.get(f"{y_cmp} Gerçekleşen"),
+                      series.get(f"{y_cmp} Hedef"))
+        if ba is not None and ca is not None:
+            last = max(ca[ca > 0].index, default=0)
+            ytd_b, ytd_c = ba.loc[:last].sum(), ca.loc[:last].sum()
+            k = st.columns(3)
+            k[0].metric(f"{y_base} ({AYLAR[last - 1] if last else '-'}'a kadar)", fmt_tl(ytd_b) if met == "Ciro" else tr_num(ytd_b))
+            k[1].metric(f"{y_cmp} ({AYLAR[last - 1] if last else '-'}'a kadar)", fmt_tl(ytd_c) if met == "Ciro" else tr_num(ytd_c),
+                        f"%{pct(ytd_b, ytd_c):.1f}" if pct(ytd_b, ytd_c) is None else None)
+            if ch is not None:
+                ch_sum = ch.loc[:last].sum()
+                ca_sum = ca.loc[:last].sum()
+                ratio = (ca_sum / ch_sum * 100) if ch_sum > 0 else 0
+                k[2].metric(f"{y_cmp} Hedef Gerçekleşme", f"%{ratio:.1f}" if ch_sum > 0 else "-")
+
+        cfg = {"Ay": st.column_config.TextColumn("Ay")}
+        for col_name in table.columns:
+            if col_name != "Ay":
+                cfg[col_name] = st.column_config.NumberColumn(
+                    col_name,
+                    format="%.2f ₺" if met == "Ciro" else "%.0f"
+                )
+        st.dataframe(table, use_container_width=True, hide_index=True, column_config=cfg)
+
+# ===================================================================
+# MOD 3 — 2027 HEDEF OLUŞTURUCU
+# ===================================================================
+elif mode.startswith("🚀"):
+    st.header("🚀 2026'dan Hareketle 2027 Hedef Simülasyonu")
+    df = load_parsed("Baz alınacak sayfa:", find_sheet(sheet_names, ("HEDEF",), ("PALET", "CIRO")))
+    c1, c2, c3 = st.columns(3)
+    y_base = c1.selectbox("Baz Yıl:", sorted(df["Yıl"].unique().tolist()),
+                          index=len(df["Yıl"].unique()) - 1)
+    turler = df[df["Yıl"] == y_base]["Tür"].unique().tolist()
+    tur = c2.selectbox("Baz Veri Türü:", turler)
+    fill = c3.checkbox("Verisi olmayan ayları ortalamayla doldur (yıllıklandır)", value=True)
+    base = df[(df["Yıl"] == y_base) & (df["Tür"] == tur)]
+
+    s1, s2 = st.columns(2)
+    g_ciro = s1.slider("Genel Ciro Büyüme Oranı (%)", 0, 150, 25, 5)
+    g_palet = s2.slider("Genel Palet Büyüme Oranı (%)", 0, 150, 15, 5)
+
+    def month_fill(s):
+        s = s.reindex(range(1, 13), fill_value=0.0)
+        if fill and (s > 0).any():
+            s = s.where(s > 0, s[s > 0].mean())
+        return s
+
+    raw_m = {m: base.groupby("Ay")[m].sum().reindex(range(1, 13), fill_value=0.0) for m in ("Ciro", "Palet")}
+    fill_m = {m: month_fill(raw_m[m]) for m in raw_m}
+    factor = {m: (fill_m[m].sum() / raw_m[m].sum() if raw_m[m].sum() > 0 else 1.0) for m in raw_m}
+
+    st.subheader("👥 Müşteri Bazlı Hedefler")
+    cust = base.groupby("Müşteri")[["Ciro", "Palet"]].sum().sort_values("Ciro", ascending=False).reset_index()
+    cust["Ciro"] *= factor["Ciro"]
+    cust["Palet"] *= factor["Palet"]
+
+    ed_in = pd.DataFrame({"Müşteri": cust["Müşteri"], f"{y_base} Ciro (₺)": cust["Ciro"].round(2),
+                          f"{y_base} Palet": cust["Palet"].round(0),
+                          "Ciro Büyüme (%)": float(g_ciro), "Palet Büyüme (%)": float(g_palet)})
+
+    edited = st.data_editor(ed_in, hide_index=True, use_container_width=True,
+                            disabled=["Müşteri", f"{y_base} Ciro (₺)", f"{y_base} Palet"],
+                            key=f"cust_ed_{y_base}_{tur}_{g_ciro}_{g_palet}_{fill}",
+                            column_config={
+                                f"{y_base} Ciro (₺)": st.column_config.NumberColumn(format="%.2f ₺"),
+                                f"{y_base} Palet": st.column_config.NumberColumn(format="%.0f"),
+                                "Ciro Büyüme (%)": st.column_config.NumberColumn(format="%.1f %%"),
+                                "Palet Büyüme (%)": st.column_config.NumberColumn(format="%.1f %%")
+                            })
+
+    res = edited.copy()
+    res["2027 Hedef Ciro (₺)"] = res[f"{y_base} Ciro (₺)"] * (1 + res["Ciro Büyüme (%)"] / 100)
+    res["2027 Hedef Palet"] = res[f"{y_base} Palet"] * (1 + res["Palet Büyüme (%)"] / 100)
+
+    pp, pc = pot_totals()
+    inc_pot = st.checkbox("Potansiyel müşterilerin olasılık ağırlıklı katkısını ekle", value=True)
+    t_ciro = res["2027 Hedef Ciro (₺)"].sum() + (pc if inc_pot else 0)
+    t_palet = res["2027 Hedef Palet"].sum() + (pp if inc_pot else 0)
+    b_ciro, b_palet = edited[f"{y_base} Ciro (₺)"].sum(), edited[f"{y_base} Palet"].sum()
+
+    k = st.columns(4)
+    k[0].metric(f"{y_base} Ciro (taban)", fmt_tl(b_ciro))
+    k[1].metric("2027 Hedef Ciro", fmt_tl(t_ciro), f"%{pct(b_ciro, t_ciro):.1f}" if pct(b_ciro, t_ciro) is not None else None)
+    k[2].metric(f"{y_base} Palet (taban)", tr_num(b_palet))
+    k[3].metric("2027 Hedef Palet", tr_num(t_palet), f"%{pct(b_palet, t_palet):.1f}" if pct(b_palet, t_palet) is not None else None)
+
+    def dist(met, total):
+        s = fill_m[met]
+        share = s / s.sum() if s.sum() > 0 else pd.Series(1 / 12, index=s.index)
+        return share * total
+
+    monthly = pd.DataFrame({
+        "Ay": AYLAR,
+        f"{y_base} Ciro (₺)": fill_m["Ciro"].values, "2027 Hedef Ciro (₺)": dist("Ciro", t_ciro).values,
+        f"{y_base} Palet": fill_m["Palet"].values, "2027 Hedef Palet": dist("Palet", t_palet).values})
+
+    fig = go.Figure([go.Bar(name=str(y_base), x=AYLAR, y=monthly[f"{y_base} Ciro (₺)"]),
+                     go.Bar(name="2027 Hedef", x=AYLAR, y=monthly["2027 Hedef Ciro (₺)"])])
+    fig.update_layout(barmode="group", title="Aylık Ciro: Taban vs 2027 Hedef")
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.dataframe(
+        monthly,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Ay": st.column_config.TextColumn("Ay"),
+            f"{y_base} Ciro (₺)": st.column_config.NumberColumn(format="%.2f ₺"),
+            "2027 Hedef Ciro (₺)": st.column_config.NumberColumn(format="%.2f ₺"),
+            f"{y_base} Palet": st.column_config.NumberColumn(format="%.0f"),
+            "2027 Hedef Palet": st.column_config.NumberColumn(format="%.0f")
+        }
+    )
+
+    pot_rows = pd.concat([d.assign(Kategori=k_) for k_, d in ss["pot"].items() if len(d)]) \
+        if any(len(d) for d in ss["pot"].values()) else pd.DataFrame()
+    st.download_button("⬇️️ 2027 Hedeflerini Excel'e Aktar",
+                       to_excel({"Aylık Hedef": monthly, "Müşteri Hedefleri": res,
+                                 "Potansiyel": pot_rows if len(pot_rows) else pd.DataFrame({"Bilgi": ["Yok"]})}),
+                       file_name="2027_hedefler.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+# ===================================================================
+# MOD 4 — POTANSİYEL MÜŞTERİLER
+# ===================================================================
+else:
+    st.header("🔍 Potansiyel Müşteriler & Kategori Bazlı 2027 Hedefleri")
+    st.caption("Veriler oturum boyunca saklanır. Sayfayı kapatmadan önce Excel olarak indirin.")
+
+    with st.expander("➕ Kategori ekle / 📤 Önceki listeyi geri yükle"):
+        n1, n2 = st.columns(2)
+        new_cat = n1.text_input("Yeni kategori adı")
+        if n1.button("Kategori Ekle") and new_cat and new_cat not in ss["pot"]:
+            ss["pot"][new_cat] = empty_pot()
+            st.rerun()
+        back = n2.file_uploader("İndirdiğiniz potansiyel listesi (.xlsx)", type=["xlsx"], key="pot_up")
+        if back is not None and n2.button("Geri Yükle"):
+            loaded = pd.read_excel(back, sheet_name=None, engine="openpyxl")
+            for name, d in loaded.items():
+                if set(POT_COLS).issubset(d.columns):
+                    ss["pot"][name] = d[POT_COLS].copy()
+            st.rerun()
+
+    tabs = st.tabs(list(ss["pot"].keys()))
+    for tab, cat in zip(tabs, list(ss["pot"].keys())):
+        with tab:
+            ed = st.data_editor(
+                ss["pot"][cat], num_rows="dynamic", use_container_width=True, key=f"pot_{cat}",
+                column_config={
+                    "Durum": st.column_config.SelectboxColumn("Durum", options=DURUMLAR),
+                    "Olasılık (%)": st.column_config.NumberColumn(min_value=0, max_value=100, step=5, format="%.0f %%"),
+                    "2027 Tahmini Palet": st.column_config.NumberColumn(min_value=0, step=100, format="%.0f"),
+                    "2027 Tahmini Ciro (₺)": st.column_config.NumberColumn(min_value=0, step=100000, format="%.2f ₺")})
+            ss["pot"][cat] = ed
+            w = ed["Olasılık (%)"].fillna(0) / 100
+            c1, c2 = st.columns(2)
+            c1.metric("Toplam Tahmini Ciro", fmt_tl(ed["2027 Tahmini Ciro (₺)"].fillna(0).sum()))
+            c2.metric("Olasılık Ağırlıklı Ciro", fmt_tl((ed["2027 Tahmini Ciro (₺)"].fillna(0) * w).sum()))
+
+    st.subheader("📊 Tüm Kategoriler Özeti")
+    summ = pd.DataFrame([{
+        "Kategori": c,
+        "Firma Sayısı": len(d),
+        "Tahmini Palet": d["2027 Tahmini Palet"].fillna(0).sum(),
+        "Tahmini Ciro (₺)": d["2027 Tahmini Ciro (₺)"].fillna(0).sum(),
+        "Ağırlıklı Ciro (₺)": (d["2027 Tahmini Ciro (₺)"].fillna(0) * d["Olasılık (%)"].fillna(0) / 100).sum()}
+        for c, d in ss["pot"].items()])
+
+    st.dataframe(
+        summ,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Kategori": st.column_config.TextColumn("Kategori"),
+            "Firma Sayısı": st.column_config.NumberColumn("Firma Sayısı", format="%d"),
+            "Tahmini Palet": st.column_config.NumberColumn("Tahmini Palet", format="%.0f"),
+            "Tahmini Ciro (₺)": st.column_config.NumberColumn("Tahmini Ciro", format="%.2f ₺"),
+            "Ağırlıklı Ciro (₺)": st.column_config.NumberColumn("Ağırlıklı Ciro", format="%.2f ₺")
+        }
+    )
+
+    if summ["Tahmini Ciro (₺)"].sum() > 0:
+        fig = go.Figure([go.Bar(name="Tahmini", x=summ["Kategori"], y=summ["Tahmini Ciro (₺)"]),
+                         go.Bar(name="Olasılık Ağırlıklı", x=summ["Kategori"], y=summ["Ağırlıklı Ciro (₺)"])])
+        fig.update_layout(barmode="group", title="Kategori Bazlı 2027 Potansiyel Ciro")
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.download_button("⬇️ Potansiyel Listesini Excel'e Aktar",
+                       to_excel({c: d if len(d) else empty_pot() for c, d in ss["pot"].items()}),
+                       file_name="potansiyel_musteriler.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
