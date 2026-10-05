@@ -37,7 +37,6 @@ def to_num(v) -> float:
         return 0.0
 
 def tr_num(x, dec=0) -> str:
-    """Türkçe binlik ayracı nokta, kuruş ayracı virgül formatı"""
     if x is None or pd.isna(x):
         return "0"
     s = f"{float(x):,.{dec}f}"
@@ -57,7 +56,7 @@ def get_sheet_names(file_bytes: bytes):
     return pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl").sheet_names
 
 @st.cache_data(show_spinner=False)
-def parse_logistic_excel(file_bytes: bytes, sheet: str, default_year: int) -> pd.DataFrame:
+def parse_logistic_excel(file_bytes: bytes, sheet: str) -> pd.DataFrame:
     raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet, header=None, engine="openpyxl")
     
     metric_cols = {}
@@ -72,9 +71,7 @@ def parse_logistic_excel(file_bytes: bytes, sheet: str, default_year: int) -> pd
             met = "Ciro"
             
         if met:
-            ym = re.search(r"\b(202[0-9])\b", col_text)
-            yr = int(ym.group(1)) if ym else default_year
-            metric_cols[j] = (met, yr)
+            metric_cols[j] = met
             
     if not metric_cols:
         return pd.DataFrame()
@@ -94,15 +91,15 @@ def parse_logistic_excel(file_bytes: bytes, sheet: str, default_year: int) -> pd
         if not c_name or "TOPLAM" in norm(c_name) or c_name.lower() in ("nan", "none"):
             continue
             
-        for j, (met, yr) in metric_cols.items():
+        for j, met in metric_cols.items():
             val = to_num(raw.iat[r, j])
-            records.append({"Müşteri": c_name, "Yıl": yr, "Metrik": met, "Değer": val})
+            records.append({"Müşteri": c_name, "Metrik": met, "Değer": val})
             
     if not records:
         return pd.DataFrame()
         
     piv = pd.DataFrame(records).pivot_table(
-        index=["Müşteri", "Yıl"], columns="Metrik", values="Değer", aggfunc="sum", fill_value=0.0
+        index=["Müşteri"], columns="Metrik", values="Değer", aggfunc="sum", fill_value=0.0
     ).reset_index()
     
     if "Ciro" not in piv: piv["Ciro"] = 0.0
@@ -110,28 +107,29 @@ def parse_logistic_excel(file_bytes: bytes, sheet: str, default_year: int) -> pd
     return piv
 
 # ===================================================================
-# STREAMLIT ARAYÜZ
+# STREAMLIT ARAYÜZ (ÇİFT DOSYA YÜKLEME)
 # ===================================================================
 st.title("🚚 Lojistik Ciro, Palet & Bütçe Sunum Portalı")
 
-up = st.sidebar.file_uploader("Excel Raporunu Yükleyin (.xlsx)", type=["xlsx"])
-default_yr = st.sidebar.number_input("Varsayılan Yıl", 2020, 2030, 2026)
+st.sidebar.header("📁 Excel Dosya Yükleme")
+up_2025 = st.sidebar.file_uploader("2025 Excel Raporunu Yükleyin (.xlsx)", type=["xlsx"], key="u25")
+up_2026 = st.sidebar.file_uploader("2026 Excel Raporunu Yükleyin (.xlsx)", type=["xlsx"], key="u26")
 
-if up is None:
-    st.info("👈 Lütfen sol menüden Excel dosyanızı yükleyin.")
-    st.stop()
+df_2025 = pd.DataFrame()
+df_2026 = pd.DataFrame()
 
-FB = up.getvalue()
-sheet_names = get_sheet_names(FB)
-sheet = st.sidebar.selectbox("Sayfa Seçin:", sheet_names)
+# 2025 İşleme
+if up_2025 is not None:
+    sheets_25 = get_sheet_names(up_2025.getvalue())
+    s_25 = st.sidebar.selectbox("2025 Sayfa Seçin:", sheets_25, key="s25")
+    df_2025 = parse_logistic_excel(up_2025.getvalue(), s_25)
 
-df_all = parse_logistic_excel(FB, sheet, int(default_yr))
+# 2026 İşleme
+if up_2026 is not None:
+    sheets_26 = get_sheet_names(up_2026.getvalue())
+    s_26 = st.sidebar.selectbox("2026 Sayfa Seçin:", sheets_26, key="s26")
+    df_2026 = parse_logistic_excel(up_2026.getvalue(), s_26)
 
-if df_all.empty:
-    st.error("Excel dosyasında Ciro/Palet verileri ayrıştırılamadı. Sütun başlıklarını kontrol edin.")
-    st.stop()
-
-# İSTEDİĞİNİZ BAŞLIKLAR
 mode = st.sidebar.radio("📌 Çalışma Modunu Seçin:", [
     "📊 2026'da Ne Yaptık?",
     "⚔️ 2025'e Göre Ne Değişti?",
@@ -144,12 +142,11 @@ mode = st.sidebar.radio("📌 Çalışma Modunu Seçin:", [
 if mode == "📊 2026'da Ne Yaptık?":
     st.header("📊 2026'da Ne Yaptık? (Ciro ve Performans Özeti)")
     
-    df_26 = df_all[df_all["Yıl"] == 2026].copy()
-    if df_26.empty:
-        st.warning("2026 yılına ait veri bulunamadı. Lütfen varsayılan yılı veya Excel içeriğini kontrol edin.")
+    if df_2026.empty:
+        st.info("👈 Lütfen sol menüden 2026 yılı Excel dosyanızı yükleyin.")
         st.stop()
         
-    top20 = df_26.sort_values("Ciro", ascending=False).head(20).copy()
+    top20 = df_2026.sort_values("Ciro", ascending=False).head(20).copy()
     top20["Palet Başı TL"] = top20.apply(lambda r: (r["Ciro"] / r["Palet"]) if r["Palet"] > 0 else 0.0, axis=1)
     
     # Grafik
@@ -189,26 +186,18 @@ if mode == "📊 2026'da Ne Yaptık?":
     
     st.markdown("---")
     
-    # Stratejik İvme Analizi & Otomatik Yorumlama
+    # Yorumlar
     st.subheader("💡 2026 Performans Yorumlarımız ve Öne Çıkanlar")
-    
     high_value_custs = top20[top20["Palet Başı TL"] > (avg_ptl * 1.15)]
     
-    notes = [
-        f"* **Genel Verimlilik:** 2026 yılı genelinde palet başına ortalama **{fmt_tl(avg_ptl)}** ciro elde edilmiştir."
-    ]
-    
+    notes = [f"* **Genel Verimlilik:** 2026 genelinde palet başına ortalama **{fmt_tl(avg_ptl)}** ciro elde edilmiştir."]
     if not high_value_custs.empty:
         star_cust = high_value_custs.iloc[0]["Müşteri"]
         star_val = high_value_custs.iloc[0]["Palet Başı TL"]
-        notes.append(f"* **Hızlı İvme Gösteren Müşteri:** **{star_cust}** palet başına **{fmt_tl(star_val)}** ile genel ortalamanın çok üzerinde verimlilik sağladı. Yılın ikinci yarısında/Eylül ayı sonrasında portföye eklenmiş veya ivme kazanmış olsa dahi 2026'nın en dikkat çeken büyüme motoru olmuştur.")
-    
-    notes.append("* **2027 Operasyonel Taktik:** Birim getirisi düşük müşterilerde fiyat güncellemesi, ivmeli müşterilerde ise kapasite artırımı hedeflenmiştir.")
+        notes.append(f"* **Hızlı İvme Gösteren Müşteri:** **{star_cust}** palet başına **{fmt_tl(star_val)}** ile genel ortalamanın üzerinde verimlilik yakalamış, yıl içi hızlı ivmesiyle dikkat çekmiştir.")
     
     st.info("\n".join(notes))
     
-    # Top 20 Tablosu
-    st.subheader("🏆 2026 Top 20 Müşteri Listesi")
     disp_top20 = pd.DataFrame({
         "Müşteri Unvanı": top20["Müşteri"],
         "Ciro": top20["Ciro"].apply(fmt_tl),
@@ -223,10 +212,19 @@ if mode == "📊 2026'da Ne Yaptık?":
 elif mode == "⚔️ 2025'e Göre Ne Değişti?":
     st.header("⚔️ 2025'e Göre Ne Değişti? (Karşılaştırma Analizi)")
     
-    df_25 = df_all[df_all["Yıl"] == 2025].groupby("Müşteri")[["Ciro", "Palet"]].sum().add_suffix("_2025")
-    df_26 = df_all[df_all["Yıl"] == 2026].groupby("Müşteri")[["Ciro", "Palet"]].sum().add_suffix("_2026")
+    # KONTROL: 2025 verisi var mı?
+    if df_2025.empty:
+        st.warning("⚠️ **Elinizde 2025 yılı verisi bulunmuyor.** 2025'e göre ne yaptığımızı karşılaştırabilmek için lütfen sol menüden **2025 Excel Raporunu** da yükleyin.")
+        st.stop()
+        
+    if df_2026.empty:
+        st.warning("⚠️ Lütfen karşılaştırma için **2026 Excel Raporunu** da yükleyin.")
+        st.stop()
+
+    df_25_m = df_2025.set_index("Müşteri").add_suffix("_2025")
+    df_26_m = df_2026.set_index("Müşteri").add_suffix("_2026")
     
-    cmp = df_26.join(df_25, how="outer").fillna(0.0).reset_index()
+    cmp = df_26_m.join(df_25_m, how="outer").fillna(0.0).reset_index()
     top20_cmp = cmp.sort_values("Ciro_2026", ascending=False).head(20).copy()
     
     st.subheader("📈 Noktasal Ciro Değişimi (2025 vs 2026)")
@@ -238,10 +236,9 @@ elif mode == "⚔️ 2025'e Göre Ne Değişti?":
     
     top20_cmp["Ciro Farkı (₺)"] = top20_cmp["Ciro_2026"] - top20_cmp["Ciro_2025"]
     
-    # 2025'te olmayıp 2026'da yıldızı parlayanlar
     new_stars = top20_cmp[(top20_cmp["Ciro_2025"] == 0) & (top20_cmp["Ciro_2026"] > 0)]
     if not new_stars.empty:
-        st.success(f"🚀 **2026'da Portföye Katılan Hızlı İvmeli Müşteriler:** {', '.join(new_stars['Müşteri'].tolist())} yıl içinde portföye eklenerek sıçrama yapmıştır.")
+        st.success(f"🚀 **2026'da Portföye Katılan Hızlı İvmeli Müşteriler:** {', '.join(new_stars['Müşteri'].tolist())} 2025'te olmayıp 2026'da portföye katılarak yüksek ivme yakalamıştır.")
         
     st.subheader("📋 Top 20 Müşteri Değişim Tablosu")
     disp_cmp = pd.DataFrame({
@@ -259,18 +256,15 @@ elif mode == "⚔️ 2025'e Göre Ne Değişti?":
 # ===================================================================
 elif mode == "🚀 2027'de Ne Yapacağız?":
     st.header("🚀 2027'de Ne Yapacağız?")
-    st.write("2027 için **en önemli 10 müşterimizden ve yıl içi yüksek ivme yakalayan isimlerden** beklentilerimizi ve büyüme hedeflerimizi planlıyoruz.")
     
-    df_26 = df_all[df_all["Yıl"] == 2026].sort_values("Ciro", ascending=False).copy()
-    
-    if df_26.empty:
-        st.warning("Hedef belirlemek için 2026 yılı verisi bulunamadı.")
+    if df_2026.empty:
+        st.info("👈 Hedefleri belirlemek için sol menüden 2026 Excel dosyanızı yükleyin.")
         st.stop()
         
-    top10 = df_26.head(10).copy()
-    top10["2027 Hedef Büyüme (%)"] = 25.0
+    st.write("2027 yılı için **en önemli 10 müşterimizden ve yıl içi yüksek ivme yakalayan isimlerden** beklentilerimizi simüle ediyoruz.")
     
-    st.subheader("🎯 En Önemli 10 Müşterimiz ve Hedef Büyüme Oranları")
+    top10 = df_2026.sort_values("Ciro", ascending=False).head(10).copy()
+    top10["2027 Hedef Büyüme (%)"] = 25.0
     
     edited_10 = st.data_editor(
         top10[["Müşteri", "Ciro", "Palet", "2027 Hedef Büyüme (%)"]],
@@ -293,11 +287,11 @@ elif mode == "🚀 2027'de Ne Yapacağız?":
     avg_ptl_27 = (t_ciro_27 / t_palet_27) if t_palet_27 > 0 else 0.0
     
     st.markdown("---")
-    st.subheader("📊 2027 İçin Şunları Hedefliyoruz:")
+    st.subheader("🎯 2027 İÇİN ŞUNLARI HEDEFLİYORUZ:")
     
     k1, k2, k3 = st.columns(3)
     k1.metric("2027 Hedeflenen Ciro", fmt_tl(t_ciro_27))
     k2.metric("2027 Hedeflenen Palet", fmt_palet(t_palet_27))
     k3.metric("2027 Palet Başı Ort. Gelir", fmt_tl(avg_ptl_27))
     
-    st.info(f"📌 **2027 Bütçe Stratejimiz:** 2026 yılında ana omurgayı oluşturan Top 10 müşterimiz ve yıl sonuna doğru ivme kazanan yeni portföyümüzle 2027'de toplam **{fmt_tl(t_ciro_27)}** ciro ve **{fmt_palet(t_palet_27)}** palet hacmine ulaşmayı planlıyoruz.")
+    st.info(f"📌 **2027 Bütçe Beklentilerimiz:** 2026 yılında ana ciro omurgasını oluşturan en önemli 10 müşterimiz ve yıl içerisinde yakalanan ivmeyle birlikte 2027'de toplam **{fmt_tl(t_ciro_27)}** ciro ve **{fmt_palet(t_palet_27)}** palet hacmine ulaşmayı hedefliyoruz.")
