@@ -13,14 +13,13 @@ st.set_page_config(page_title="Ciro & Bütçeleme Analiz Portalı", page_icon="�
 # YARDIMCI FONKSİYONLAR
 # ===================================================================
 AYLAR = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran",
-         "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
+         "Temmuz", "Ağustos", "Eylul", "Ekim", "Kasım", "Aralık"]
 
 _TR = str.maketrans("İıŞşĞğÜüÖöÇç", "IISSGGUUOOCC")
 
 
 def norm(x) -> str:
-    """Türkçe karakterleri sadeleştirip BÜYÜK harfe çevirir (NİSAN / Nisan / NISAN hepsi aynı olur).
-    Eski kodda str.upper() 'Nisan' -> 'NISAN' yaptığı için 'NİSAN' ile eşleşmiyordu."""
+    """Türkçe karakterleri sadeleştirip BÜYÜK harfe çevirir."""
     if x is None or (not isinstance(x, (list, tuple)) and pd.isna(x)):
         return ""
     return str(x).translate(_TR).upper().strip()
@@ -59,7 +58,7 @@ def has_info(row) -> int:
 
 
 def to_num(v) -> float:
-    """'1.234.567,89 ₺' / '1234.5' / 1234 -> float. (Eski kod noktaları siliyordu: 1234.5 -> 12345 oluyordu.)"""
+    """Metinsel ifadeleri ve para birimlerini sayısal türe çevirir."""
     if isinstance(v, (int, float, np.number)):
         return 0.0 if pd.isna(v) else float(v)
     if v is None:
@@ -128,7 +127,6 @@ def _row_label_parts(hdr: pd.DataFrame, j: int):
 
 
 def _parse_cols_as_months(raw: pd.DataFrame, default_year: int):
-    """Düzen A: Her ay sütunlarda (OCAK | PALET, CİRO ...), müşteriler satırlarda."""
     month_row = None
     for r in range(min(15, len(raw))):
         if sum(1 for v in raw.iloc[r] if find_month(v)) >= 3:
@@ -148,7 +146,7 @@ def _parse_cols_as_months(raw: pd.DataFrame, default_year: int):
         rows.append(r_below)
     start = max(rows) + 1
 
-    hdr = raw.iloc[rows].ffill(axis=1)  # birleştirilmiş hücreleri yana doğru doldur
+    hdr = raw.iloc[rows].ffill(axis=1)
     kept = {}
     for j in range(raw.shape[1]):
         cells, label = _row_label_parts(hdr, j)
@@ -186,11 +184,10 @@ def _parse_cols_as_months(raw: pd.DataFrame, default_year: int):
         frames.append(pd.DataFrame({
             "Müşteri": cust_s, "Yıl": yr, "Tür": tur, "Ay": m, "Metrik": met,
             "Değer": data.iloc[:, c].map(to_num)})[ok])
-    return pd.concat(frames)
+    return pd.concat(frames) if frames else None
 
 
 def _parse_rows_as_months(raw: pd.DataFrame, default_year: int):
-    """Düzen B: Aylar satırlarda, sütunlarda yıl / palet / ciro (toplam tablo)."""
     mcol, idx = None, []
     for c in range(min(4, raw.shape[1])):
         idx = [r for r in range(len(raw)) if find_month(raw.iat[r, c], strict=True)]
@@ -264,7 +261,7 @@ def pie_with_other(d: pd.DataFrame, col: str, title: str, topn: int):
 
 
 # ===================================================================
-# OTURUM HAFIZASI
+# OTURUM HAFIZASI (SESSION STATE)
 # ===================================================================
 ss = st.session_state
 ss.setdefault("file_bytes", None)
@@ -312,7 +309,7 @@ if up is not None:
 if ss["file_bytes"] is not None and st.sidebar.button("🗑️ Dosyayı Kaldır / Yenile"):
     ss["file_bytes"] = None
     ss["file_name"] = None
-    ss["uploader_key"] += 1  # uploader'ı gerçekten sıfırlar (eski kodda dosya geri geliyordu)
+    ss["uploader_key"] += 1
     st.rerun()
 
 mode = st.sidebar.radio("Çalışma Modunu Seçin:", [
@@ -343,10 +340,9 @@ def load_parsed(label, default_idx):
     with st.expander("🔎 Sayfa önizleme / algılanan yapı"):
         st.caption(f"Algılanan kayıt: {len(df)} satır | Yıllar: {sorted(df['Yıl'].unique().tolist())} | "
                    f"Türler: {df['Tür'].unique().tolist()}")
-        st.dataframe(get_raw(FB, sheet).head(15).astype(str), width="stretch")
+        st.dataframe(get_raw(FB, sheet).head(15).astype(str), use_container_width=True)
     if df.empty:
-        st.warning("Bu sayfada ay / palet / ciro başlıkları algılanamadı. Önizlemeyi kontrol edin; "
-                   "başlıklarda ay adı (OCAK...) ve PALET / CİRO (veya TUTAR) kelimeleri geçmelidir.")
+        st.warning("Bu sayfada ay / palet / ciro başlıkları algılanamadı. Önizlemeyi kontrol edin.")
         st.stop()
     return df
 
@@ -396,8 +392,8 @@ if mode.startswith("📈"):
                         f"{AYLAR[cm - 1]} — Ciro Dağılımı", topn)
     f2 = pie_with_other(cmp_df.rename(columns={"Palet_son": "Palet"}), "Palet",
                         f"{AYLAR[cm - 1]} — Palet Dağılımı", topn)
-    if f1: g1.plotly_chart(f1, width="stretch")
-    if f2: g2.plotly_chart(f2, width="stretch")
+    if f1: g1.plotly_chart(f1, use_container_width=True)
+    if f2: g2.plotly_chart(f2, use_container_width=True)
 
     g3, g4 = st.columns(2)
     for col_box, met, cprev, ccur in ((g3, "Ciro", "Ciro_ön", "Ciro_son"), (g4, "Palet", "Palet_ön", "Palet_son")):
@@ -405,7 +401,7 @@ if mode.startswith("📈"):
         fig = go.Figure([go.Bar(name=AYLAR[pm - 1], x=t["Müşteri"], y=t[cprev]),
                          go.Bar(name=AYLAR[cm - 1], x=t["Müşteri"], y=t[ccur])])
         fig.update_layout(barmode="group", title=f"En Yüksek {met} — Müşteri Bazlı Karşılaştırma")
-        col_box.plotly_chart(fig, width="stretch")
+        col_box.plotly_chart(fig, use_container_width=True)
 
     st.markdown("---")
     sty = {"Ciro_ön": fmt_tl, "Ciro_son": fmt_tl, "Ciro Farkı": fmt_tl,
@@ -416,7 +412,7 @@ if mode.startswith("📈"):
         box.write(f"**{title}**")
         cols = ["Müşteri", "Ciro_ön", "Ciro_son", "Ciro Farkı", "Palet Farkı"]
         box.dataframe(d[cols].style.format({k_: v for k_, v in sty.items() if k_ in cols}),
-                      width="stretch", hide_index=True)
+                      use_container_width=True, hide_index=True)
 
     st.subheader(f"📅 {year} Yıllık Seyir")
     t1, t2 = st.tabs(["Ciro", "Palet"])
@@ -424,7 +420,7 @@ if mode.startswith("📈"):
         colors = ["#EF553B" if m == cm else "#636EFA" if m == pm else "#C8CDD8" for m in range(1, 13)]
         fig = go.Figure(go.Bar(x=AYLAR, y=tot[met].values, marker_color=colors))
         fig.update_layout(title=f"Aylık {met} (seçili dönem vurgulu)")
-        tab.plotly_chart(fig, width="stretch")
+        tab.plotly_chart(fig, use_container_width=True)
 
 # ===================================================================
 # MOD 2 — 2025 / 2026 HEDEF KARŞILAŞTIRMASI
@@ -456,7 +452,7 @@ elif mode.startswith("🎯"):
 
         fig = go.Figure([go.Bar(name=k, x=AYLAR, y=v.values) for k, v in series.items()])
         fig.update_layout(barmode="group", title=f"Aylık {met}")
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
 
         ba, ca, ch = (series.get(f"{y_base} Gerçekleşen"), series.get(f"{y_cmp} Gerçekleşen"),
                       series.get(f"{y_cmp} Hedef"))
@@ -469,13 +465,15 @@ elif mode.startswith("🎯"):
             k[1].metric(f"{y_cmp} ({AYLAR[last - 1] if last else '-'}'a kadar)", fmt(ytd_c),
                         None if pct(ytd_b, ytd_c) is None else f"%{pct(ytd_b, ytd_c):.1f}")
             if ch is not None:
-                k[2].metric(f"{y_cmp} Hedef Gerçekleşme", f"%{pct(ch.loc[:last].sum(), ca.loc[:last].sum()) + 100:.1f}"
-                            if ch.loc[:last].sum() else "-")
+                ch_sum = ch.loc[:last].sum()
+                ca_sum = ca.loc[:last].sum()
+                ratio = (ca_sum / ch_sum * 100) if ch_sum > 0 else 0
+                k[2].metric(f"{y_cmp} Hedef Gerçekleşme", f"%{ratio:.1f}" if ch_sum > 0 else "-")
             table["Fark"] = ca.values - ba.values
             table["Değişim %"] = [pct(x, y) for x, y in zip(ba.values, ca.values)]
         st.dataframe(table.style.format({c: fmt for c in table.columns if c not in ("Ay", "Değişim %")}
-                                        | {"Değişim %": lambda v: "-" if v is None or pd.isna(v) else f"%{v:.1f}"}),
-                     width="stretch", hide_index=True)
+                                         | {"Değişim %": lambda v: "-" if v is None or pd.isna(v) else f"%{v:.1f}"}),
+                     use_container_width=True, hide_index=True)
 
 # ===================================================================
 # MOD 3 — 2027 HEDEF OLUŞTURUCU
@@ -507,14 +505,14 @@ elif mode.startswith("🚀"):
     if fill and any(abs(f - 1) > 1e-9 for f in factor.values()):
         st.caption(f"ℹ️ Eksik aylar ortalamayla dolduruldu; {y_base} yıllıklandırılmış taban kullanılıyor.")
 
-    st.subheader("👥 Müşteri Bazlı Hedefler (büyüme oranlarını tablodan değiştirebilirsiniz)")
+    st.subheader("👥 Müşteri Bazlı Hedefler")
     cust = base.groupby("Müşteri")[["Ciro", "Palet"]].sum().sort_values("Ciro", ascending=False).reset_index()
     cust["Ciro"] *= factor["Ciro"]
     cust["Palet"] *= factor["Palet"]
     ed_in = pd.DataFrame({"Müşteri": cust["Müşteri"], f"{y_base} Ciro (₺)": cust["Ciro"].round(0),
                           f"{y_base} Palet": cust["Palet"].round(0),
                           "Ciro Büyüme (%)": float(g_ciro), "Palet Büyüme (%)": float(g_palet)})
-    edited = st.data_editor(ed_in, hide_index=True, width="stretch",
+    edited = st.data_editor(ed_in, hide_index=True, use_container_width=True,
                             disabled=["Müşteri", f"{y_base} Ciro (₺)", f"{y_base} Palet"],
                             key=f"cust_ed_{y_base}_{tur}_{g_ciro}_{g_palet}_{fill}")
     res = edited.copy()
@@ -547,9 +545,9 @@ elif mode.startswith("🚀"):
     fig = go.Figure([go.Bar(name=str(y_base), x=AYLAR, y=monthly[f"{y_base} Ciro (₺)"]),
                      go.Bar(name="2027 Hedef", x=AYLAR, y=monthly["2027 Hedef Ciro (₺)"])])
     fig.update_layout(barmode="group", title="Aylık Ciro: Taban vs 2027 Hedef")
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True)
     st.dataframe(monthly.style.format({c: (fmt_tl if "Ciro" in c else tr_num) for c in monthly.columns if c != "Ay"}),
-                 width="stretch", hide_index=True)
+                 use_container_width=True, hide_index=True)
 
     pot_rows = pd.concat([d.assign(Kategori=k_) for k_, d in ss["pot"].items() if len(d)]) \
         if any(len(d) for d in ss["pot"].values()) else pd.DataFrame()
@@ -564,8 +562,7 @@ elif mode.startswith("🚀"):
 # ===================================================================
 else:
     st.header("🔍 Potansiyel Müşteriler & Kategori Bazlı 2027 Hedefleri")
-    st.caption("Veriler oturum boyunca saklanır. Sayfayı kapatmadan önce Excel olarak indirin; "
-               "bir sonraki sefer aşağıdan geri yükleyebilirsiniz.")
+    st.caption("Veriler oturum boyunca saklanır. Sayfayı kapatmadan önce Excel olarak indirin.")
 
     with st.expander("➕ Kategori ekle / 📤 Önceki listeyi geri yükle"):
         n1, n2 = st.columns(2)
@@ -585,7 +582,7 @@ else:
     for tab, cat in zip(tabs, list(ss["pot"].keys())):
         with tab:
             ed = st.data_editor(
-                ss["pot"][cat], num_rows="dynamic", width="stretch", key=f"pot_{cat}",
+                ss["pot"][cat], num_rows="dynamic", use_container_width=True, key=f"pot_{cat}",
                 column_config={
                     "Durum": st.column_config.SelectboxColumn("Durum", options=DURUMLAR),
                     "Olasılık (%)": st.column_config.NumberColumn(min_value=0, max_value=100, step=5),
@@ -606,12 +603,12 @@ else:
         "Ağırlıklı Ciro (₺)": (d["2027 Tahmini Ciro (₺)"].fillna(0) * d["Olasılık (%)"].fillna(0) / 100).sum()}
         for c, d in ss["pot"].items()])
     st.dataframe(summ.style.format({"Tahmini Palet": tr_num, "Tahmini Ciro (₺)": fmt_tl, "Ağırlıklı Ciro (₺)": fmt_tl}),
-                 width="stretch", hide_index=True)
+                 use_container_width=True, hide_index=True)
     if summ["Tahmini Ciro (₺)"].sum() > 0:
         fig = go.Figure([go.Bar(name="Tahmini", x=summ["Kategori"], y=summ["Tahmini Ciro (₺)"]),
                          go.Bar(name="Olasılık Ağırlıklı", x=summ["Kategori"], y=summ["Ağırlıklı Ciro (₺)"])])
         fig.update_layout(barmode="group", title="Kategori Bazlı 2027 Potansiyel Ciro")
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
     st.download_button("⬇️ Potansiyel Listesini Excel'e Aktar",
                        to_excel({c: d if len(d) else empty_pot() for c, d in ss["pot"].items()}),
                        file_name="potansiyel_musteriler.xlsx",
