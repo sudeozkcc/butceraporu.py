@@ -20,9 +20,13 @@ BLUE_SEQ = ["#1F4E9C", "#2F64B5", "#4479C4", "#5A8ED0", "#74A2DA",
 st.markdown(
     """
 <style>
-div[data-testid="stMetric"]{background:#f7f9fc;border:1px solid #e3e8ef;border-radius:12px;padding:12px 16px;}
-div[data-testid="stMetricLabel"], div[data-testid="stMetricLabel"] p{color:#5b6574 !important;}
-div[data-testid="stMetricValue"]{color:#1f2937 !important;}
+div[data-testid="stMetric"]{background:#f7f9fc;border:1px solid #e3e8ef;border-radius:10px;padding:10px 14px;}
+div[data-testid="stMetricLabel"], div[data-testid="stMetricLabel"] p{color:#5b6574 !important;font-size:0.8rem !important;}
+div[data-testid="stMetricValue"]{color:#1f2937 !important;font-size:1.15rem !important;line-height:1.3 !important;}
+div[data-testid="stMetricValue"] > div{overflow:visible !important;text-overflow:clip !important;white-space:normal !important;word-break:break-word;}
+div[data-testid="stMetricDelta"]{font-size:0.75rem !important;}
+h1{font-size:1.7rem !important;} h2{font-size:1.35rem !important;} h3{font-size:1.1rem !important;}
+div[data-testid="stMarkdownContainer"] p, div[data-testid="stMarkdownContainer"] li{font-size:0.92rem;}
 </style>
 """,
     unsafe_allow_html=True,
@@ -95,6 +99,15 @@ def tr_num(x, dec=0) -> str:
 def fmt_tl(x) -> str:
     return tr_num(x, dec=0) + " ₺"
 
+def fmt_short_tl(x) -> str:
+    if x >= 1e6:
+        t = tr_num(x / 1e6, 2)
+        t = t[:-3] if t.endswith(",00") else (t[:-1] if t.endswith("0") else t)
+        return t + " M ₺"
+    if x >= 1e3:
+        return tr_num(x / 1e3, 0) + " B ₺"
+    return fmt_tl(x)
+
 def fmt_palet(x) -> str:
     return tr_num(x, dec=0)
 
@@ -134,14 +147,14 @@ def diverge(values, center=0.0):
 # ===================================================================
 # GRAFİK & TABLO
 # ===================================================================
-def render_table(headers, cols, fills, widths=None):
+def render_table(headers, cols, fills, widths=None, font_size=12):
     n = len(cols[0]) if cols else 0
     fig = go.Figure(go.Table(
         columnwidth=widths,
         header=dict(values=[f"<b>{h}</b>" for h in headers], fill_color=BLUE,
                     font=dict(color="white", size=13), align="center", height=36, line_color="white"),
         cells=dict(values=cols, fill_color=fills, align=["left"] + ["right"] * (len(cols) - 1),
-                   font=dict(size=12, color="#1a202c"), height=30, line_color="white"),
+                   font=dict(size=font_size, color="#1a202c"), height=28, line_color="white"),
     ))
     fig.update_layout(margin=dict(l=0, r=0, t=6, b=6), height=min(70 + 31 * n, 1100))
     show(fig)
@@ -237,21 +250,6 @@ def monthly_fig(info):
     fig.update_layout(template="plotly_white", separators=",.", height=380,
                       title=dict(text=f"<b>Aylık Toplam {metric}</b>", x=0.5),
                       yaxis=dict(visible=False, range=[0, float(tbm.max()) * 1.2]),
-                      margin=dict(l=10, r=10, t=60, b=10))
-    return fig
-
-def riser_fig(info):
-    colors = [BLUE, ORANGE, "#2E7D32", "#7B1FA2", "#455A64"]
-    piv, months, names, metric = info["piv"], info["months"], info["names"], info["metric"]
-    fig = go.Figure()
-    for c, k in zip(colors, info["riser_keys"][:5]):
-        fig.add_trace(go.Scatter(x=[TR_AY[m] for m in months], y=[float(piv.loc[k, m]) for m in months],
-                                 mode="lines+markers", name=names[k], line=dict(color=c, width=3),
-                                 marker=dict(size=8)))
-    fig.update_layout(template="plotly_white", separators=",.", height=420,
-                      title=dict(text=f"<b>Hızlı İvme Yakalayan Müşterilerin Aylık {metric} Seyri</b>", x=0.5),
-                      yaxis=dict(title=metric, tickformat=",.0f", gridcolor="#eef1f6"),
-                      legend=dict(orientation="h", y=-0.15, x=0.5, xanchor="center"),
                       margin=dict(l=10, r=10, t=60, b=10))
     return fig
 
@@ -541,8 +539,6 @@ def render_momentum(info):
     if info["rising"]:
         st.subheader("🚀 Yıl İçi Hızlı İvme Yakalayanlar")
         st.success("\n".join(info["rising"]))
-        if info["riser_keys"]:
-            show(riser_fig(info))
     if info["falling"]:
         st.subheader("⚠️ Gerileyen Müşteriler")
         st.warning("\n".join(info["falling"]))
@@ -592,21 +588,6 @@ EXTRA_POOL = {
                                 "Kasap Döner", "HD İskender", "Pidem", "Bursa Kebap Evi", "Kahve Dünyası",
                                 "Arabica", "Sushico", "Green Salads", "Big Baker"],
 }
-
-def seg_table(title, d):
-    """Ara toplam satırlı hedef tablosu."""
-    n = len(d)
-    p_tot, c_tot = d["HEDEF PALET"].sum(), d["HEDEF CİRO"].sum()
-    render_table(
-        ["UNVAN", "HEDEF PALET", "HEDEF CİRO"],
-        [d["UNVAN"].tolist() + ["<b>ARA TOPLAM</b>"],
-         [fmt_palet(v) for v in d["HEDEF PALET"]] + [f"<b>{fmt_palet(p_tot)}</b>"],
-         [fmt_tl(v) for v in d["HEDEF CİRO"]] + [f"<b>{fmt_tl(c_tot)}</b>"]],
-        [["rgb(247,248,250)"] * n + ["rgb(214,226,244)"],
-         shade(d["HEDEF PALET"], hex_rgb(BLUE)) + ["rgb(214,226,244)"],
-         shade(d["HEDEF CİRO"], hex_rgb(BLUE)) + ["rgb(214,226,244)"]],
-        widths=[3, 1.5, 2],
-    )
 
 # ===================================================================
 # ARAYÜZ
@@ -885,22 +866,25 @@ elif mode == MODES[3]:
     m3.metric("Hedef Firma Sayısı", fmt_palet(len(all_df)))
     m4.metric("Segment Sayısı", str(len(frames)))
 
-    # Segment özeti
-    seg_names = [t.split(". ", 1)[1] for t in frames]
-    seg_p = [f["HEDEF PALET"].sum() for f in frames.values()]
-    seg_c = [f["HEDEF CİRO"].sum() for f in frames.values()]
-    fig = go.Figure(go.Bar(
-        y=seg_names, x=seg_p, orientation="h", marker_color=BLUE,
-        text=[f"{fmt_palet(p)} palet · {fmt_tl(c)}" for p, c in zip(seg_p, seg_c)], textposition="outside"))
-    fig.update_layout(template="plotly_white", separators=",.", height=110 + 60 * len(seg_names),
-                      title=dict(text="<b>Segment Bazında Hedef</b>", x=0.5),
-                      xaxis=dict(visible=False, range=[0, max(seg_p + [1]) * 1.7]),
-                      yaxis=dict(autorange="reversed"), margin=dict(l=10, r=10, t=60, b=10))
-    show(fig)
-
-    for title, d in frames.items():
-        st.subheader(title)
-        seg_table(title, d)
+    SEG_LABELS = ["🐔 Et / Tavuk / Şarküteri", "🥛 Süt / Peynir", "❄️ Donuk Gıda", "🍔 Zincir Restoran"]
+    st.markdown("---")
+    cols = st.columns(len(frames))
+    for col, lab, (title, d) in zip(cols, SEG_LABELS, frames.items()):
+        with col:
+            n = len(d)
+            st.markdown(f"**{lab}**")
+            st.caption(f"{fmt_palet(d['HEDEF PALET'].sum())} palet · {fmt_short_tl(d['HEDEF CİRO'].sum())}")
+            tot_fill = "rgb(214,226,244)"
+            render_table(
+                ["UNVAN", "PALET", "CİRO"],
+                [d["UNVAN"].tolist() + ["<b>TOPLAM</b>"],
+                 [fmt_palet(v) for v in d["HEDEF PALET"]] + [f"<b>{fmt_palet(d['HEDEF PALET'].sum())}</b>"],
+                 [fmt_short_tl(v) for v in d["HEDEF CİRO"]] + [f"<b>{fmt_short_tl(d['HEDEF CİRO'].sum())}</b>"]],
+                [["rgb(247,248,250)"] * n + [tot_fill],
+                 shade(d["HEDEF PALET"], hex_rgb(BLUE), lo=0.05, hi=0.45) + [tot_fill],
+                 shade(d["HEDEF CİRO"], hex_rgb(BLUE), lo=0.05, hi=0.45) + [tot_fill]],
+                widths=[2.6, 1, 1.4], font_size=11,
+            )
 
     st.markdown("---")
     st.subheader("➕ Ek Olarak Hedef Havuzuna Eklenecek / Araştırılacak Firmalar")
@@ -909,37 +893,3 @@ elif mode == MODES[3]:
         with col:
             st.markdown(f"**{grp}**")
             st.markdown("\n".join(f"* {n}" for n in names))
-
-    st.markdown("---")
-    st.subheader("🏷️ Hedefleri 3 Seviyeye Ayıralım")
-    l1, l2 = st.columns(2)
-    a_min = l1.number_input("A seviyesi alt sınır (palet)", min_value=0, value=1500, step=100)
-    b_min = l2.number_input("B seviyesi alt sınır (palet)", min_value=0, value=800, step=100)
-
-    def level(p):
-        return "A – STRATEJİK" if p >= a_min else ("B – BÜYÜK HEDEF" if p >= b_min else "C – GELİŞTİRİLECEK")
-
-    all_df["SEVİYE"] = all_df["HEDEF PALET"].map(level)
-    rows = []
-    rng = {"A – STRATEJİK": f"{fmt_palet(a_min)}+ palet", "B – BÜYÜK HEDEF": f"{fmt_palet(b_min)}–{fmt_palet(a_min - 1)} palet",
-           "C – GELİŞTİRİLECEK": f"{fmt_palet(b_min - 1)} ve altı"}
-    for lv in rng:
-        s = all_df[all_df["SEVİYE"] == lv]
-        rows.append((lv, rng[lv], len(s), s["HEDEF PALET"].sum(), s["HEDEF CİRO"].sum()))
-    lv_df = pd.DataFrame(rows, columns=["SEVİYE", "ARALIK", "FİRMA", "PALET", "CİRO"])
-    render_table(
-        ["SEVİYE", "ARALIK", "FİRMA SAYISI", "HEDEF PALET", "HEDEF CİRO"],
-        [lv_df["SEVİYE"].tolist(), lv_df["ARALIK"].tolist(), [str(v) for v in lv_df["FİRMA"]],
-         [fmt_palet(v) for v in lv_df["PALET"]], [fmt_tl(v) for v in lv_df["CİRO"]]],
-        [["rgb(247,248,250)"] * 3, ["rgb(247,248,250)"] * 3, ["rgb(247,248,250)"] * 3,
-         shade(lv_df["PALET"], hex_rgb(BLUE)), shade(lv_df["CİRO"], hex_rgb(BLUE))],
-        widths=[2, 2, 1.2, 1.5, 2],
-    )
-    for lv, c in zip(rng, st.columns(3)):
-        with c:
-            s = all_df[all_df["SEVİYE"] == lv].sort_values("HEDEF PALET", ascending=False)
-            with st.expander(f"{lv} ({len(s)} firma)"):
-                st.markdown("\n".join(f"* {r['UNVAN']} · {fmt_palet(r['HEDEF PALET'])} palet" for _, r in s.iterrows()))
-
-    st.info("📌 **Öneri:** Satış ekibinin zamanının çoğunu A grubuna ayırması mantıklı. Bu firmalarda depolama, elleçleme, "
-            "parsiyel, FTL, mikro dağıtım ve şube dağıtımı birlikte satılabilir.")
