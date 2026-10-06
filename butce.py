@@ -513,4 +513,7 @@ def load_year(year: int):
         return empty, empty_m
 
     mon = build_monthly(raw, cust, lay["ciro_m"], lay["palet_m"], int(start))
-    st.sidebar.caption(f"✅ {year}: {len(
+    st.sidebar.caption(
+        f"✅ {year}: {len(df)} müşteri · Ciro {fmt_tl(df['Ciro'].sum())} · Palet {fmt_palet(df['Palet'].sum())}"
+    )
+    return df, mon
