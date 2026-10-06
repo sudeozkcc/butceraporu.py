@@ -71,6 +71,20 @@ def norm(x) -> str:
 def name_key(x) -> str:
     return re.sub(r"\s+", " ", norm(x))
 
+def compact(x) -> str:
+    return re.sub(r"[^A-Z0-9]", "", norm(x))
+
+def names_match(target_name, excel_name) -> bool:
+    """Hedef listedeki firma adı ile Excel'deki müşteri adını (boşluk/noktalama farkı olmadan) eşleştirir."""
+    e = compact(excel_name)
+    if len(e) < 4:
+        return False
+    for part in str(target_name).split("/"):
+        c = compact(part)
+        if len(c) >= 4 and (c in e or e in c):
+            return True
+    return False
+
 def to_num(v) -> float:
     if isinstance(v, (int, float, np.number)):
         return 0.0 if pd.isna(v) else float(v)
@@ -159,32 +173,50 @@ def render_table(headers, cols, fills, widths=None, font_size=12):
     fig.update_layout(margin=dict(l=0, r=0, t=6, b=6), height=min(70 + 31 * n, 1100))
     show(fig)
 
-def ciro_palet_chart(top):
-    """Her müşteri bir satır: solda ciro, sağda palet. Rakamlar noktaların yanında yazılı, üst üste binme yok."""
+def ciro_palet_chart(top, avg_ptl=0.0):
+    """Slider tarzı grafik: uzun gri hat = en büyük değer, mavi/turuncu dolgu = müşterinin değeri.
+    Sağda toplam ciro, palet ve doğrudan palet başı gelir yazılıdır."""
     d = top.sort_values("Ciro", ascending=False)
     names = d["Müşteri"].tolist()
-    fig = make_subplots(rows=1, cols=2, shared_yaxes=True, horizontal_spacing=0.03,
-                        subplot_titles=("<b>Ciro (₺)</b>", "<b>Palet (adet)</b>"))
-    specs = [(1, "Ciro", BLUE, lambda v: tr_num(v) + " ₺"), (2, "Palet", ORANGE, fmt_palet)]
+    n = len(names)
+    fig = make_subplots(rows=1, cols=3, shared_yaxes=True, horizontal_spacing=0.015,
+                        column_widths=[0.45, 0.30, 0.25],
+                        subplot_titles=("<b>TOPLAM CİRO (₺)</b>", "<b>PALET (adet)</b>", "<b>PALET BAŞI GELİR (₺)</b>"))
+    specs = [(1, "Ciro", BLUE, lambda v: f"<b>{tr_num(v)} ₺</b>"),
+             (2, "Palet", ORANGE, lambda v: f"<b>{fmt_palet(v)}</b>")]
     for col, key, color, fmt in specs:
         vals = d[key].tolist()
-        sx, sy = [], []
-        for n, v in zip(names, vals):
-            sx += [0, v, None]
-            sy += [n, n, None]
-        fig.add_trace(go.Scatter(x=sx, y=sy, mode="lines", line=dict(color="#d5dbe3", width=3),
+        mx = max(vals) if vals and max(vals) > 0 else 1.0
+        tx, ty, fx, fy = [], [], [], []
+        for nm, v in zip(names, vals):
+            tx += [0, mx, None]
+            ty += [nm, nm, None]
+            fx += [0, v, None]
+            fy += [nm, nm, None]
+        fig.add_trace(go.Scatter(x=tx, y=ty, mode="lines", line=dict(color="#e3e8ef", width=10),
+                                 hoverinfo="skip", showlegend=False), row=1, col=col)
+        fig.add_trace(go.Scatter(x=fx, y=fy, mode="lines", line=dict(color=color, width=10),
                                  hoverinfo="skip", showlegend=False), row=1, col=col)
         hover = [f"<b>{r['Müşteri']}</b><br>Ciro: {tr_num(r['Ciro'])} ₺<br>Palet: {fmt_palet(r['Palet'])}"
                  f"<br>Palet başı: {tr_num(r['Palet Başı TL'])} ₺" for _, r in d.iterrows()]
-        fig.add_trace(go.Scatter(x=vals, y=names, mode="markers+text", showlegend=False,
-                                 marker=dict(size=12, color=color), text=[fmt(v) for v in vals],
-                                 textposition="middle right", textfont=dict(size=12, color="#1f2937"),
+        fig.add_trace(go.Scatter(x=vals, y=names, mode="markers", showlegend=False,
+                                 marker=dict(size=19, color=color, line=dict(color="white", width=3)),
                                  hovertext=hover, hoverinfo="text"), row=1, col=col)
-        mx = max(vals) if vals else 1
-        fig.update_xaxes(range=[0, mx * 1.5], showticklabels=False, showgrid=False, zeroline=False, row=1, col=col)
+        fig.add_trace(go.Scatter(x=[mx] * n, y=names, mode="text", showlegend=False, hoverinfo="skip",
+                                 text=[fmt(v) for v in vals], textposition="middle right",
+                                 textfont=dict(size=14, color=color)), row=1, col=col)
+        fig.update_xaxes(range=[0, mx * 1.7], showticklabels=False, showgrid=False, zeroline=False, row=1, col=col)
+    ptl = d["Palet Başı TL"].tolist()
+    dots = ["#2E7D32" if (v >= avg_ptl) else "#C62828" for v in ptl]
+    fig.add_trace(go.Scatter(x=[0] * n, y=names, mode="markers+text", showlegend=False,
+                             marker=dict(size=11, color=dots), textposition="middle right",
+                             text=[f"  <b>{tr_num(v)} ₺</b>" for v in ptl], textfont=dict(size=14, color="#1f2937"),
+                             hoverinfo="skip"), row=1, col=3)
+    fig.update_xaxes(range=[-0.05, 1], showticklabels=False, showgrid=False, zeroline=False, row=1, col=3)
     fig.update_yaxes(type="category", categoryorder="array", categoryarray=names,
                      autorange="reversed", automargin=True, showgrid=False)
-    fig.update_layout(template="plotly_white", separators=",.", height=110 + 36 * len(names),
+    fig.update_annotations(font_size=12)
+    fig.update_layout(template="plotly_white", separators=",.", height=120 + 40 * n,
                       margin=dict(l=10, r=10, t=50, b=10))
     return fig
 
@@ -577,6 +609,8 @@ SEGMENTS = [
         ("BIG BAKER", 200), ("ÇÖPS", 200)]),
 ]
 
+SEG_SHORT = ["Et/Tavuk", "Süt", "Donuk", "Restoran"]
+
 EXTRA_POOL = {
     "Et / Tavuk": ["Lezita", "Erpiliç", "CP Standart Gıda", "Bupiliç", "Gedik", "Hastavuk", "Pınar Et",
                    "Namet", "Polonez", "Aytaç", "Banvit", "Şenpiliç", "Beypiliç"],
@@ -629,8 +663,9 @@ if mode == MODES[0]:
 
     st.markdown("---")
     st.subheader("📊 Müşteri Bazında Ciro ve Palet (Top 20)")
-    st.caption("Her satır bir müşteri. Mavi nokta ciroyu, turuncu nokta paleti gösterir; rakamlar noktaların yanında yazılıdır.")
-    show(ciro_palet_chart(top20))
+    st.caption(f"Her satır bir müşteri; gri hat en büyük müşteriyi, dolu kısım müşterinin payını gösterir. "
+               f"Palet başı gelirde 🟢 ortalamanın ({fmt_tl(avg_ptl)}) üstü, 🔴 altı.")
+    show(ciro_palet_chart(top20, avg_ptl))
 
     st.subheader("🥧 Müşteri Payları (İlk 10 + Diğer)")
     p1, p2 = st.columns(2)
@@ -752,9 +787,6 @@ elif mode == MODES[1]:
     newc = top[(top["Ciro_2025"] == 0) & (top["Ciro_2026"] > 0)].head(5)
     for _, r in newc.iterrows():
         notes.append(f"* **{r['Müşteri']}** 2025'te kaydı yokken 2026'da portföye girerek {fmt_tl(r['Ciro_2026'])} ciro ve {fmt_palet(r['Palet_2026'])} palete ulaştı.")
-    lost = cmp[(cmp["Ciro_2026"] == 0) & (cmp["Ciro_2025"] > 0)].sort_values("Ciro_2025", ascending=False).head(5)
-    if not lost.empty:
-        notes.append("* **2026'da ciro görünmeyen 2025 müşterileri:** " + ", ".join(lost["Müşteri"].tolist()) + ".")
     st.info("\n".join(notes) if notes else "Yorum üretmek için yeterli veri yok.")
 
     render_momentum(momentum_notes(mon_2026))
@@ -764,67 +796,122 @@ elif mode == MODES[1]:
 # ===================================================================
 elif mode == MODES[2]:
     st.header("🚀 2027'de Ne Yapacağız?")
-    if df_2026.empty:
-        st.info("👈 Hedefleri belirlemek için sol menüden 2026 Excel dosyanızı yükleyin.")
+    st.write("2027 hedefi yalnızca **hedef müşteri listemizdeki en büyük çaplı firmalar** ve **şu an hızlı ivme gösteren firmalar** üzerinden belirlenir.")
+
+    c1, c2, c3 = st.columns(3)
+    top_n = c1.slider("Hedef listesinden en büyük kaç firma?", 3, 40, 10)
+    unit = c2.number_input("Hedef firmalarda 1 palet = ₺", min_value=0, value=2500, step=100)
+    mult = c3.number_input("Hızlı ivme çarpanı", min_value=0.5, value=2.5, step=0.1,
+                           help="2026'da gerçekleşen paletin kaç katı hedeflensin? Örn. 500 palet × 2,5 = 1.250 palet.")
+
+    info, rising_names = None, []
+    if not df_2026.empty:
+        info = momentum_notes(mon_2026)
+        auto = []
+        for k in (info["riser_keys"] if info else []):
+            m = df_2026[df_2026["Anahtar"] == k]
+            if not m.empty:
+                auto.append(m["Müşteri"].iloc[0])
+        opts = df_2026.sort_values("Ciro", ascending=False)["Müşteri"].tolist()
+        rising_names = st.multiselect("🚀 Hızlı ivme gösteren firmalar (otomatik bulundu; ekleyip çıkarabilirsiniz)",
+                                      opts, default=auto)
+        if info and info["rising"]:
+            st.success("\n".join(info["rising"]))
+    else:
+        st.info("👈 Hızlı ivme gösteren firmaları katmak için 2026 Excel dosyasını yükleyin. Şimdilik yalnızca hedef müşteriler hesaplanıyor.")
+
+    rising_rows = df_2026[df_2026["Müşteri"].isin(rising_names)] if rising_names else df_2026.iloc[0:0]
+
+    # Hedef müşteri listesi (en büyükten küçüğe), hızlı ivmeli firmalarla aynı olanlar çıkarılır
+    tgt = pd.DataFrame([(n, p, SEG_SHORT[i]) for i, (_, rs) in enumerate(SEGMENTS) for n, p in rs],
+                       columns=["Firma", "P", "Seg"]).sort_values("P", ascending=False, kind="stable")
+    keep = [not any(names_match(f, r) for r in rising_rows["Müşteri"]) for f in tgt["Firma"]]
+    tgt = tgt[keep].head(top_n)
+
+    rows = []
+    for _, r in tgt.iterrows():
+        act = None
+        if not df_2026.empty:
+            m = df_2026[df_2026["Müşteri"].map(lambda x: names_match(r["Firma"], x))]
+            if not m.empty:
+                act = m.sort_values("Ciro", ascending=False).iloc[0]
+        rows.append({"Firma": r["Firma"], "Tür": f"Hedef müşteri ({r['Seg']})",
+                     "2026 Palet": float(act["Palet"]) if act is not None else 0.0,
+                     "2026 Ciro": float(act["Ciro"]) if act is not None else 0.0,
+                     "Palet Başı ₺": float(unit), "2027 Hedef Palet": float(r["P"])})
+    for _, r in rising_rows.iterrows():
+        ptl = r["Ciro"] / r["Palet"] if r["Palet"] > 0 and r["Ciro"] > 0 else float(unit)
+        rows.append({"Firma": r["Müşteri"], "Tür": "Hızlı ivme", "2026 Palet": float(r["Palet"]),
+                     "2026 Ciro": float(r["Ciro"]), "Palet Başı ₺": round(float(ptl)),
+                     "2027 Hedef Palet": float(round(r["Palet"] * mult))})
+
+    if not rows:
+        st.warning("Hesaplanacak firma yok.")
         st.stop()
 
-    st.write("2027 için **en önemli 10 müşterimizden** beklentilerimizi simüle ediyoruz. Büyüme oranlarını tablodan değiştirebilirsiniz.")
-    top10 = df_2026.sort_values("Ciro", ascending=False).head(10).reset_index(drop=True)
-    top10["2027 Hedef Büyüme (%)"] = 25.0
-
-    edited = editor(
-        top10[["Müşteri", "Ciro", "Palet", "2027 Hedef Büyüme (%)"]],
-        hide_index=True, disabled=["Müşteri", "Ciro", "Palet"],
-        column_config={
-            "Müşteri": st.column_config.TextColumn("Hedef Müşterilerimiz (Top 10)", width="large"),
-            "Ciro": st.column_config.NumberColumn("2026 Mevcut Ciro (₺)", format="%.0f"),
-            "Palet": st.column_config.NumberColumn("2026 Mevcut Palet", format="%.0f"),
-            "2027 Hedef Büyüme (%)": st.column_config.NumberColumn("2027 Beklenen Büyüme (%)", format="%.1f", min_value=-100.0, step=1.0),
-        },
-    ).copy()
-
-    g = 1 + edited["2027 Hedef Büyüme (%)"] / 100
-    edited["Ciro 2027"] = edited["Ciro"] * g
-    edited["Palet 2027"] = edited["Palet"] * g
-    t_c26, t_c27, t_p27 = edited["Ciro"].sum(), edited["Ciro 2027"].sum(), edited["Palet 2027"].sum()
-    avg27 = t_c27 / t_p27 if t_p27 > 0 else 0.0
-    growth = (t_c27 - t_c26) / t_c26 * 100 if t_c26 else 0.0
+    base_df = pd.DataFrame(rows).sort_values("2027 Hedef Palet", ascending=False).reset_index(drop=True)
+    with st.expander("✏️ Rakamları düzenle (2027 hedef palet ve palet başı gelir)", expanded=False):
+        edited = editor(
+            base_df, hide_index=True, disabled=["Firma", "Tür", "2026 Palet", "2026 Ciro"],
+            column_config={
+                "Firma": st.column_config.TextColumn("Firma", width="medium"),
+                "2026 Palet": st.column_config.NumberColumn("2026 Gerçekleşen Palet", format="%.0f"),
+                "2026 Ciro": st.column_config.NumberColumn("2026 Gerçekleşen Ciro (₺)", format="%.0f"),
+                "Palet Başı ₺": st.column_config.NumberColumn("Palet Başı Gelir (₺)", format="%.0f", min_value=0.0, step=50.0),
+                "2027 Hedef Palet": st.column_config.NumberColumn("2027 Hedef Palet", format="%.0f", min_value=0.0, step=50.0),
+            })
+    d = edited.copy()
+    d["2027 Hedef Ciro"] = d["2027 Hedef Palet"] * d["Palet Başı ₺"]
+    n = len(d)
+    tot_p, tot_c = d["2027 Hedef Palet"].sum(), d["2027 Hedef Ciro"].sum()
+    is_r = d["Tür"] == "Hızlı ivme"
 
     st.markdown("---")
-    st.subheader("🎯 2027 İÇİN ŞUNLARI HEDEFLİYORUZ (Top 10 müşteri)")
+    st.subheader("🎯 2027 İÇİN ŞUNLARI HEDEFLİYORUZ")
     k1, k2, k3, k4 = st.columns(4)
-    k1.metric("2027 Hedeflenen Ciro", fmt_tl(t_c27), delta=f"{'+' if growth >= 0 else ''}{tr_num(growth, 1)} %")
-    k2.metric("2027 Hedeflenen Palet", fmt_palet(t_p27))
-    k3.metric("2027 Palet Başı Ort. Gelir", fmt_tl(avg27))
-    k4.metric("2026 Top 10 Ciro", fmt_tl(t_c26))
+    k1.metric("2027 Hedeflenen Ciro", fmt_tl(tot_c))
+    k2.metric("2027 Hedeflenen Palet", fmt_palet(tot_p))
+    k3.metric("Palet Başı Ort. Gelir", fmt_tl(tot_c / tot_p if tot_p > 0 else 0.0))
+    k4.metric("Firma Sayısı", f"{n} ({int(is_r.sum())} hızlı ivme)")
 
-    g1, g2 = st.columns([3, 2])
-    with g1:
-        fig = go.Figure()
-        fig.add_trace(go.Bar(x=edited["Müşteri"], y=edited["Ciro"], name="2026 Ciro", marker_color=GREY,
-                             hovertemplate="<b>%{x}</b><br>2026: %{y:,.0f} ₺<extra></extra>"))
-        fig.add_trace(go.Bar(x=edited["Müşteri"], y=edited["Ciro 2027"], name="2027 Hedef", marker_color=BLUE,
-                             hovertemplate="<b>%{x}</b><br>2027: %{y:,.0f} ₺<extra></extra>"))
-        fig.update_layout(template="plotly_white", separators=",.", barmode="group", height=460,
-                          title=dict(text="<b>2026 Gerçekleşen vs 2027 Hedef Ciro</b>", x=0.5),
-                          xaxis=dict(tickangle=-35), yaxis=dict(tickformat=",.0f", gridcolor="#eef1f6"),
-                          legend=dict(orientation="h", y=1.1, x=0.5, xanchor="center"),
-                          margin=dict(l=10, r=10, t=70, b=10))
-        show(fig)
-    with g2:
-        show(pie_fig(edited.rename(columns={"Ciro 2027": "Ciro27"}), "Ciro27", "2027 Hedef Ciro Payları"))
+    st.caption("🟦 Hedef müşteri · 🟧 Hızlı ivme gösteren firma · gri çubuk: 2026'da gerçekleşen palet")
+    names = d["Firma"].tolist()
+    colors = [ORANGE if r else BLUE for r in is_r]
+    mx = float(max(d["2027 Hedef Palet"].max(), d["2026 Palet"].max(), 1))
+    fig = go.Figure()
+    fig.add_trace(go.Bar(y=names, x=d["2026 Palet"], orientation="h", name="2026 Gerçekleşen", marker_color="#cfd6df",
+                         text=[fmt_palet(v) if v > 0 else "" for v in d["2026 Palet"]], textposition="outside"))
+    fig.add_trace(go.Bar(y=names, x=d["2027 Hedef Palet"], orientation="h", name="2027 Hedef", marker_color=colors,
+                         text=[f"{fmt_palet(p)} palet · {fmt_short_tl(c)}" for p, c in zip(d["2027 Hedef Palet"], d["2027 Hedef Ciro"])],
+                         textposition="outside"))
+    fig.update_layout(template="plotly_white", separators=",.", barmode="group", height=140 + 50 * n,
+                      xaxis=dict(visible=False, range=[0, mx * 1.6]),
+                      yaxis=dict(type="category", autorange="reversed", automargin=True),
+                      legend=dict(orientation="h", y=1.04, x=0.5, xanchor="center"),
+                      margin=dict(l=10, r=10, t=40, b=10))
+    show(fig)
 
+    tint = [mix(hex_rgb(ORANGE), 0.22) if r else mix(hex_rgb(BLUE), 0.15) for r in is_r]
+    tot_fill = "rgb(214,226,244)"
     render_table(
-        ["Müşteri", "2026 Ciro", "Büyüme", "2027 Hedef Ciro", "2026 Palet", "2027 Hedef Palet"],
-        [edited["Müşteri"].tolist(), [fmt_tl(v) for v in edited["Ciro"]],
-         [fmt_pct(v) for v in edited["2027 Hedef Büyüme (%)"]], [fmt_tl(v) for v in edited["Ciro 2027"]],
-         [fmt_palet(v) for v in edited["Palet"]], [fmt_palet(v) for v in edited["Palet 2027"]]],
-        [["rgb(247,248,250)"] * len(edited), shade(edited["Ciro"], hex_rgb(GREY)),
-         diverge(edited["2027 Hedef Büyüme (%)"]), shade(edited["Ciro 2027"], hex_rgb(BLUE)),
-         shade(edited["Palet"], hex_rgb(GREY)), shade(edited["Palet 2027"], hex_rgb(ORANGE))],
-        widths=[3, 2, 1.2, 2, 1.3, 1.5],
+        ["Firma", "Tür", "2026 Palet", "2027 Hedef Palet", "Palet Başı Gelir", "2027 Hedef Ciro"],
+        [names + ["<b>TOPLAM</b>"], d["Tür"].tolist() + [""],
+         [fmt_palet(v) if v > 0 else "—" for v in d["2026 Palet"]] + [f"<b>{fmt_palet(d['2026 Palet'].sum())}</b>"],
+         [fmt_palet(v) for v in d["2027 Hedef Palet"]] + [f"<b>{fmt_palet(tot_p)}</b>"],
+         [fmt_tl(v) for v in d["Palet Başı ₺"]] + [f"<b>{fmt_tl(tot_c / tot_p if tot_p > 0 else 0)}</b>"],
+         [fmt_tl(v) for v in d["2027 Hedef Ciro"]] + [f"<b>{fmt_tl(tot_c)}</b>"]],
+        [["rgb(247,248,250)"] * n + [tot_fill], tint + [tot_fill],
+         shade(d["2026 Palet"], hex_rgb(GREY)) + [tot_fill],
+         shade(d["2027 Hedef Palet"], hex_rgb(ORANGE)) + [tot_fill],
+         ["rgb(247,248,250)"] * n + [tot_fill],
+         shade(d["2027 Hedef Ciro"], hex_rgb(BLUE)) + [tot_fill]],
+        widths=[3, 2.2, 1.4, 1.6, 1.6, 2],
     )
-    st.info(f"📌 **2027 Bütçe Beklentilerimiz:** 2026'da ana ciro omurgasını oluşturan en önemli 10 müşterimizle 2027'de toplam **{fmt_tl(t_c27)}** ciro ve **{fmt_palet(t_p27)}** palet hacmine ulaşmayı hedefliyoruz.")
+    p_r, c_r = d.loc[is_r, "2027 Hedef Palet"].sum(), d.loc[is_r, "2027 Hedef Ciro"].sum()
+    st.info(f"📌 **2027 Bütçe Beklentilerimiz:** Hedef müşteri listemizdeki en büyük {n - int(is_r.sum())} firma ve hızlı ivme gösteren "
+            f"{int(is_r.sum())} firma ile 2027'de toplam **{fmt_tl(tot_c)}** ciro ve **{fmt_palet(tot_p)}** palet hacmine ulaşmayı hedefliyoruz. "
+            f"Bunun **{fmt_palet(p_r)}** palet / **{fmt_tl(c_r)}** kısmı hızlı ivme gösteren firmalardan "
+            f"(2026 gerçekleşenin {tr_num(mult, 1)} katı) gelecek.")
 
 # ===================================================================
 # MOD 4: HEDEF MÜŞTERİLER
