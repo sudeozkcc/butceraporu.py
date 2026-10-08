@@ -286,7 +286,7 @@ def ciro_palet_chart(top, avg_ptl=0.0):
                                  marker=dict(size=19, color=color, line=dict(color="white", width=3)),
                                  hovertext=hover, hoverinfo="text"), row=1, col=col)
         fig.add_trace(go.Scatter(x=[mx] * n, y=names, mode="text", showlegend=False, hoverinfo="skip",
-                                 text=[fmt(v) for v in vals], textposition="middle right",
+                                 text=["     " + fmt(v) for v in vals], textposition="middle right",
                                  cliponaxis=False, textfont=dict(size=13, color=color)), row=1, col=col)
         fig.update_xaxes(range=[0, mx * (2.5 if col == 1 else 2.1)], showticklabels=False, showgrid=False,
                          zeroline=False, row=1, col=col)
