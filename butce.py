@@ -531,4 +531,146 @@ if mode == MODES[0]:
 elif mode == MODES[1]:
     st.header("⚔️ Karşılaştırmalı Dönem Analizi")
     if df_2025.empty or df_2026.empty:
-        st.warning("⚠️ Karşılaştırma yapabilmek için sol
+        st.warning("⚠️ Karşılaştırma yapabilmek için sol menüden hem **2025** hem de **2026** dosyalarını yükleyiniz.")
+        st.stop()
+
+    # Dönem Seçim Filtresi
+    st.subheader("⚙️ Karşılaştırılacak Dönem / Ay Seçimi")
+    c_sel1, c_sel2 = st.columns(2)
+    
+    m_list = [("Genel (Ocak - Güncel Ay)", "GENEL")] + [(f"{TR_AY[i]} Ayı", i) for i in range(1, 13)]
+    
+    with c_sel1:
+        selected_period = st.selectbox("Analiz Tipi / Dönem Seçin:", m_list, format_func=lambda x: x[0])
+    
+    sel_val = selected_period[1]
+
+    # Veriyi Döneme Göre Filtreleme
+    if sel_val == "GENEL":
+        f_df25, f_df26 = df_2025.copy(), df_2026.copy()
+        period_label = "Tüm Dönem (Genel)"
+    else:
+        f_df25 = mon_2025[mon_2025["Ay"] == sel_val] if not mon_2025.empty else pd.DataFrame()
+        f_df26 = mon_2026[mon_2026["Ay"] == sel_val] if not mon_2026.empty else pd.DataFrame()
+        period_label = f"{TR_AY[sel_val]} Ayı"
+
+    # Merge İşlemleri (İki Dönemi Yan Yana Getirme)
+    a = f_df25[["Anahtar", "Müşteri", "Ciro", "Palet"]].rename(columns={"Müşteri": "M25", "Ciro": "Ciro_2025", "Palet": "Palet_2025"}) if not f_df25.empty else pd.DataFrame(columns=["Anahtar", "M25", "Ciro_2025", "Palet_2025"])
+    b = f_df26[["Anahtar", "Müşteri", "Ciro", "Palet"]].rename(columns={"Müşteri": "M26", "Ciro": "Ciro_2026", "Palet": "Palet_2026"}) if not f_df26.empty else pd.DataFrame(columns=["Anahtar", "M26", "Ciro_2026", "Palet_2026"])
+    
+    cmp = pd.merge(b, a, on="Anahtar", how="outer")
+    cmp["Müşteri"] = cmp["M26"].fillna(cmp["M25"])
+    for col in ["Ciro_2025", "Ciro_2026", "Palet_2025", "Palet_2026"]:
+        cmp[col] = cmp[col].fillna(0.0)
+
+    # Fark Hesapları
+    cmp["Ciro Farkı"] = cmp["Ciro_2026"] - cmp["Ciro_2025"]
+    cmp["Palet Farkı"] = cmp["Palet_2026"] - cmp["Palet_2025"]
+    
+    def calc_status(row):
+        if row["Ciro_2025"] == 0 and row["Ciro_2026"] > 0:
+            return "Yeni Müşteri 🟢"
+        elif row["Ciro_2026"] == 0 and row["Ciro_2025"] > 0:
+            return "Kayıp / Terk 🔴"
+        elif row["Ciro Farkı"] > 0:
+            return "Artış Var 🟢"
+        elif row["Ciro Farkı"] < 0:
+            return "Düşüş Var 🔴"
+        return "Değişim Yok ⚪"
+
+    cmp["Durum"] = cmp.apply(calc_status, axis=1)
+
+    # ÖZET KPİ BANTLARI
+    t25, t26 = cmp["Ciro_2025"].sum(), cmp["Ciro_2026"].sum()
+    p25, p26 = cmp["Palet_2025"].sum(), cmp["Palet_2026"].sum()
+    c_diff = t26 - t25
+    c_pct = (c_diff / t25 * 100) if t25 > 0 else 0
+
+    st.markdown(f"### 📍 Seçilen Dönem: **{period_label}**")
+    
+    kpis([
+        ("2025 Dönem Ciro", fmt_tl(t25), GREY),
+        ("2026 Dönem Ciro", fmt_tl(t26), BLUE, f"{'+' if c_diff>=0 else ''}{fmt_tl(c_diff)} (%{tr_num(c_pct, 1)})", GREEN if c_diff>=0 else RED),
+        ("2025 Dönem Palet", fmt_palet(p25), GREY),
+        ("2026 Dönem Palet", fmt_palet(p26), ORANGE, f"{'+' if p26-p25>=0 else ''}{fmt_palet(p26-p25)}", GREEN if p26-p25>=0 else RED)
+    ])
+
+    st.markdown("---")
+
+    # MÜŞTERİ BAZLI YORUM VE TESPİT PANELİ (Belirgin Düşüşler)
+    st.subheader("🤖 Müşteri Bazlı Özel Yorum ve Tespitler")
+    
+    drop_customers = cmp[cmp["Ciro Farkı"] < 0].sort_values("Ciro Farkı", ascending=True)
+    rise_customers = cmp[cmp["Ciro Farkı"] > 0].sort_values("Ciro Farkı", ascending=False)
+    
+    notes = []
+    if not drop_customers.empty:
+        for _, r in drop_customers.head(4).iterrows():
+            pct = (abs(r["Ciro Farkı"]) / r["Ciro_2025"] * 100) if r["Ciro_2025"] > 0 else 0
+            notes.append(f"* 🔴 **{r['Müşteri']}**: {period_label} döneminde cirosu **{fmt_tl(r['Ciro_2025'])}** seviyesinden **{fmt_tl(r['Ciro_2026'])}** seviyesine düştü. (Net Kayıp: **{fmt_tl(abs(r['Ciro Farkı']))}**, %{tr_num(pct, 1)} gerileme).")
+    
+    if not rise_customers.empty:
+        for _, r in rise_customers.head(3).iterrows():
+            pct = (r["Ciro Farkı"] / r["Ciro_2025"] * 100) if r["Ciro_2025"] > 0 else 0
+            notes.append(f"* 🟢 **{r['Müşteri']}**: {period_label} döneminde cirosunu **{fmt_tl(r['Ciro_2025'])}** seviyesinden **{fmt_tl(r['Ciro_2026'])}** seviyesine çıkardı. (Net Artış: **{fmt_tl(r['Ciro Farkı'])}**).")
+
+    if notes:
+        st.info("\n".join(notes))
+    else:
+        st.caption("Dönemsel karşılaştırmada belirgin bir değişim tespit edilemedi.")
+
+    # TABLO GÖSTERİMİ
+    st.subheader("📋 Yan Yana Karşılaştırmalı Müşteri Tablosu")
+    st.caption("Tablo sütun başlıklarına tıklayarak sıralama yapabilirsiniz. Tüm rakamlar okunabilir formattadır.")
+
+    # Formatlama
+    disp_df = cmp[["Müşteri", "Ciro_2025", "Ciro_2026", "Ciro Farkı", "Palet_2025", "Palet_2026", "Palet Farkı", "Durum"]].copy()
+    disp_df = disp_df.sort_values("Ciro_2026", ascending=False).reset_index(drop=True)
+
+    st.dataframe(
+        disp_df.style.format({
+            "Ciro_2025": lambda v: fmt_tl(v),
+            "Ciro_2026": lambda v: fmt_tl(v),
+            "Ciro Farkı": lambda v: f"{'+' if v>0 else ''}{fmt_tl(v)}",
+            "Palet_2025": lambda v: fmt_palet(v),
+            "Palet_2026": lambda v: fmt_palet(v),
+            "Palet Farkı": lambda v: f"{'+' if v>0 else ''}{fmt_palet(v)}",
+        }),
+        use_container_width=True
+    )
+
+# -------------------------------------------------------------------
+# MOD 3: 2027 HEDEFLERİ
+# -------------------------------------------------------------------
+elif mode == MODES[2]:
+    st.header("🚀 2027 Yılı Hedef ve Bütçe Planlama")
+    st.caption("Mevcut veriler ve hedef müşteri potansiyeline göre 2027 bütçelemesi.")
+
+    unit_price = st.number_input("2027 Tahmini Palet Başı Gelir (₺):", min_value=500, max_value=20000, value=2500, step=100)
+    
+    rows = []
+    for title, list_items in SEGMENTS:
+        for nm, p in list_items:
+            rows.append({"Firma": nm, "Segment": title, "Hedef Palet": p, "Tahmini Ciro": p * unit_price})
+    
+    df_tgt = pd.DataFrame(rows)
+    
+    tot_p = df_tgt["Hedef Palet"].sum()
+    tot_c = df_tgt["Tahmini Ciro"].sum()
+
+    kpis([
+        ("Hedeflenen Toplam Ciro", fmt_tl(tot_c), BLUE),
+        ("Hedeflenen Toplam Palet", fmt_palet(tot_p), ORANGE),
+        ("Ortalama Palet Başı Gelir", fmt_tl(unit_price), GREEN)
+    ])
+
+    st.markdown("---")
+    st.subheader("📋 2027 Potansiyel Hedef Müşteri Listesi")
+    
+    st.dataframe(
+        df_tgt.style.format({
+            "Hedef Palet": lambda v: fmt_palet(v),
+            "Tahmini Ciro": lambda v: fmt_tl(v)
+        }),
+        use_container_width=True
+    )
