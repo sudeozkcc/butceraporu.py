@@ -124,6 +124,8 @@ def to_num(v) -> float:
     s = str(v).replace("₺", "").replace("TL", "").replace("\xa0", "").replace(" ", "").strip()
     if s in ("", "-", "nan", "NaN"):
         return 0.0
+    if s.startswith("(") and s.endswith(")"):
+        s = "-" + s[1:-1]
     if "," in s and "." in s:
         s = s.replace(".", "").replace(",", ".")
     elif "," in s:
@@ -261,7 +263,7 @@ def ciro_palet_chart(top, avg_ptl=0.0):
     names = d["Müşteri"].tolist()
     n = len(names)
     fig = make_subplots(rows=1, cols=3, shared_yaxes=True, horizontal_spacing=0.015,
-                        column_widths=[0.46, 0.28, 0.26],
+                        column_widths=[0.52, 0.25, 0.23],
                         subplot_titles=("<b>TOPLAM CİRO (₺)</b>", "<b>PALET (adet)</b>", "<b>PALET BAŞI GELİR (₺)</b>"))
     specs = [(1, "Ciro", BLUE, lambda v: f"<b>{tr_num(v)} ₺</b>"),
              (2, "Palet", ORANGE, lambda v: f"<b>{fmt_palet(v)}</b>")]
@@ -286,7 +288,8 @@ def ciro_palet_chart(top, avg_ptl=0.0):
         fig.add_trace(go.Scatter(x=[mx] * n, y=names, mode="text", showlegend=False, hoverinfo="skip",
                                  text=[fmt(v) for v in vals], textposition="middle right",
                                  cliponaxis=False, textfont=dict(size=13, color=color)), row=1, col=col)
-        fig.update_xaxes(range=[0, mx * 2.1], showticklabels=False, showgrid=False, zeroline=False, row=1, col=col)
+        fig.update_xaxes(range=[0, mx * (2.5 if col == 1 else 2.1)], showticklabels=False, showgrid=False,
+                         zeroline=False, row=1, col=col)
     ptl = d["Palet Başı TL"].tolist()
     dots = ["#2E7D32" if (v >= avg_ptl) else "#C62828" for v in ptl]
     fig.add_trace(go.Scatter(x=[0] * n, y=names, mode="markers+text", showlegend=False,
@@ -298,7 +301,7 @@ def ciro_palet_chart(top, avg_ptl=0.0):
                      autorange="reversed", automargin=True, showgrid=False)
     fig.update_annotations(font_size=12)
     fig.update_layout(template="plotly_white", separators=",.", height=120 + 40 * n,
-                      margin=dict(l=10, r=10, t=50, b=10))
+                      margin=dict(l=10, r=40, t=50, b=10))
     return fig
 
 def pie_fig(df, col, title, top_n=10):
@@ -321,7 +324,8 @@ def pie_fig(df, col, title, top_n=10):
     fig.update_layout(
         template="plotly_white", separators=",.", height=460,
         title=dict(text=f"<b>{title}</b>", x=0.5),
-        annotations=[dict(text=f"<b>{tr_num(sum(values))}</b>", x=0.5, y=0.5, showarrow=False, font=dict(size=14))],
+        annotations=[dict(text=f"<b>{tr_num(sum(values))}</b>", x=0.5, y=0.5, showarrow=False,
+                          font=dict(size=14 if len(tr_num(sum(values))) <= 11 else 11))],
         legend=dict(orientation="h", y=-0.12, font=dict(size=10)),
         margin=dict(l=10, r=10, t=60, b=10),
     )
@@ -443,11 +447,17 @@ def month_map(raw, hdr, cand_cols):
     if rows:
         best = max(rows, key=lambda ms: sum(1 for m in ms if m))
         if any(best):
-            cur = None
+            idx = [j for j, m in enumerate(best) if m]
+            gaps = [b - a for a, b in zip(idx, idx[1:])]
+            stride = max(int(np.median(gaps)), 1) if gaps else 3   # bir ayın kapladığı sütun sayısı
+            cur, since = None, 0
             for j, m in enumerate(best):
                 if m:
-                    cur = m
-                inherited[j] = cur
+                    cur, since = m, 0
+                elif cur is not None:
+                    since += 1
+                # Son ayın sağındaki sütunlar (toplam, tahmin, geçen yıl vb.) son aya yazılmasın
+                inherited[j] = cur if (cur is not None and since < stride) else None
     out = {}
     for j in cand_cols:
         m = direct[j] or inherited[j]
@@ -590,6 +600,26 @@ def load_year(year: int):
         return empty, empty_m
 
     mon = build_monthly(raw, cust, lay["ciro_m"], lay["palet_m"], int(start))
+
+    # Henüz gelmemiş aylar (ör. 2026'da Kasım/Aralık) veri içerse bile hesaba katılmaz
+    today = datetime.date.today()
+    if not mon.empty and year >= today.year:
+        last_ok = today.month if year == today.year else 0
+        fut = mon[mon["Ay"] > last_ok]
+        fut = fut[(fut["Ciro"] != 0) | (fut["Palet"] != 0)]
+        if not fut.empty:
+            sub_f = fut.groupby("Anahtar")[["Ciro", "Palet"]].sum()
+            df = df.merge(sub_f, left_on="Anahtar", right_index=True, how="left", suffixes=("", "_f"))
+            df["Ciro"] = (df["Ciro"] - df["Ciro_f"].fillna(0.0)).clip(lower=0.0)
+            df["Palet"] = (df["Palet"] - df["Palet_f"].fillna(0.0)).clip(lower=0.0)
+            df = df.drop(columns=["Ciro_f", "Palet_f"])
+            df = df[(df["Ciro"] != 0) | (df["Palet"] != 0)].reset_index(drop=True)
+            ay_txt = ", ".join(TR_AY[m] for m in sorted(fut["Ay"].unique()))
+            st.sidebar.caption(f"🕒 {year}: henüz gelmemiş ay(lar) ({ay_txt}) hesaptan çıkarıldı "
+                               f"({fmt_tl(fut['Ciro'].sum())} · {fmt_palet(fut['Palet'].sum())} palet).")
+        mon = mon[mon["Ay"] <= last_ok].reset_index(drop=True)
+        if df.empty:
+            return empty, empty_m
     st.sidebar.caption(f"✅ {year}: {len(df)} müşteri · Ciro {fmt_tl(df['Ciro'].sum())} · Palet {fmt_palet(df['Palet'].sum())}")
     if mon.empty:
         st.sidebar.caption(f"ℹ️ {year}: aylık sütun bulunamadı (aylık ivme yorumları üretilemez).")
