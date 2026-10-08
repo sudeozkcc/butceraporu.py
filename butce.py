@@ -743,29 +743,23 @@ SEGMENTS = [
         ("GUSTO GIDA", 500), ("FİNE FOOD", 500), ("FRİGOPAK", 400), ("MANTİYE GIDA", 300),
         ("LEZZET MANTI", 300)]),
     ("4. ZİNCİR RESTORAN / FOOD SERVICE", [
-        ("TAB GIDA", 3000), ("TAVUK DÜNYASI", 2000), ("DÜRÜMLE", 1500), ("BIGCHEFS", 1500),
+        ("TAB GIDA", 3000), ("BIGCHEFS", 1500),
         ("GÜNAYDIN KÖFTE & DÖNER", 1000), ("KÖFTECİ RAMİZ", 800), ("KASAP DÖNER", 800),
-        ("BURSA KEBAP EVİ", 600), ("HD İSKENDER", 600), ("PİDEM", 600), ("KAHVE DÜNYASI", 600),
+        ("BURSA KEBAP EVİ", 600), ("KAHVE DÜNYASI", 600),
         ("ARABICA COFFEE", 400), ("DAVID PEOPLE COFFEE", 300), ("BODRUM MANTI", 300), ("SUSHICO", 300),
         ("KAYSERİ MUTFAĞI", 300), ("GREEN SALADS", 300), ("REALLY FRIED CHICKEN", 200),
         ("BIG BAKER", 200), ("ÇÖPS", 200)]),
+    ("5. DİĞER – YENİ EKLENEN", [
+        ("İSTANBUL SÜTLÜ TATLI", 500), ("KAYA ÇİFTLİĞİ", 500), ("THİO", 400), ("YURT KONSERVE", 400),
+        ("UNIFO GIDA", 400), ("YELKEN GIDA", 400), ("PEYSAN", 400)]),
 ]
 
-SEG_SHORT = ["Et/Tavuk", "Süt", "Donuk", "Restoran"]
-SEG_LABELS = ["🐔 Et / Tavuk / Şarküteri", "🥛 Süt / Peynir", "❄️ Donuk Gıda", "🍔 Zincir Restoran"]
-TEAL = "#2A9D8F"
+# Listeye mutlaka girecek firmalar (en büyük 10 sınırına takılmaz)
+MUST_ADD = {"FİNE FOOD", "İSTANBUL SÜTLÜ TATLI", "KAYA ÇİFTLİĞİ", "THİO", "YURT KONSERVE",
+            "UNIFO GIDA", "YELKEN GIDA", "PEYSAN"}
 
-EXTRA_POOL = {
-    "Et / Tavuk": ["Lezita", "Erpiliç", "CP Standart Gıda", "Bupiliç", "Gedik", "Hastavuk", "Pınar Et",
-                   "Namet", "Polonez", "Aytaç", "Banvit", "Şenpiliç", "Beypiliç"],
-    "Süt": ["Sütaş", "Pınar Süt", "İçim / Ak Gıda", "Eker", "Yörükoğlu", "Muratbey", "Teksüt",
-            "Sek Süt", "Yörsan", "Tat Gıda", "Cebeci Süt"],
-    "Donuk": ["SuperFresh / Kerevitaş", "Feast / Özgörkey", "Pek Food", "Penguen", "Bonduelle", "Dardanel",
-              "Benmark", "Aktaşlar", "KeksBakery", "Pardo Food", "Mapek"],
-    "Restoran / Food Service": ["TAB Gıda", "Tavuk Dünyası", "Dürümle", "BigChefs", "Günaydın", "Köfteci Ramiz",
-                                "Kasap Döner", "HD İskender", "Pidem", "Bursa Kebap Evi", "Kahve Dünyası",
-                                "Arabica", "Sushico", "Green Salads", "Big Baker"],
-}
+SEG_SHORT = ["Et/Tavuk", "Süt", "Donuk", "Restoran", "Diğer"]
+TEAL = "#2A9D8F"
 
 # ===================================================================
 # ARAYÜZ
@@ -940,7 +934,6 @@ elif mode == MODES[2]:
 
     TOP_N, UNIT, MULT_R, MULT_G = 10, 2500, 2.5, 1.3     # hızlı ivme: 500 palet → 1.250 palet
     GROUP_COLORS = {"Hedef müşteri": BLUE, "Hızlı ivme": ORANGE, "Büyüyen mevcut müşteri": TEAL}
-    SEG_COLORS = ["#D1495B", "#2E86AB", "#17A398", "#8E6BBF"]
 
     info = momentum_notes(mon_2026) if not df_2026.empty else None
     kn = dict(zip(df_2026["Anahtar"], df_2026["Müşteri"])) if not df_2026.empty else {}
@@ -959,7 +952,9 @@ elif mode == MODES[2]:
     # Hedef müşteri listesi (en büyükten küçüğe); hızlı ivme / büyüyen firmalarla aynı olanlar tekrar sayılmaz
     tgt = pd.DataFrame([(n, p, SEG_SHORT[i]) for i, (_, rs) in enumerate(SEGMENTS) for n, p in rs],
                        columns=["Firma", "P", "Seg"]).sort_values("P", ascending=False, kind="stable")
-    tgt = tgt[[not any(names_match(f, r) for r in picked) for f in tgt["Firma"]]].head(TOP_N)
+    tgt = tgt[[not any(names_match(f, r) for r in picked) for f in tgt["Firma"]]]
+    must = tgt["Firma"].isin(MUST_ADD)
+    tgt = pd.concat([tgt[~must].head(TOP_N), tgt[must]]).sort_values("P", ascending=False, kind="stable")
 
     rows = []
     for _, r in tgt.iterrows():
@@ -1011,43 +1006,9 @@ elif mode == MODES[2]:
     kpis([("2027 Hedeflenen Ciro", fmt_tl(tot_c), BLUE),
           ("2027 Hedeflenen Palet", fmt_palet(tot_p), ORANGE),
           ("Palet Başı Ort. Gelir", fmt_tl(tot_c / tot_p if tot_p > 0 else 0.0), TEAL),
-          ("Kapsanan Firma", f"{n} firma", "#8E6BBF"),
-          ("Kapsanan Firmaların 2026 Paleti", fmt_palet(p26_all), "#D1495B")])
+          ("Kapsanan Firma", f"{n} firma", "#8E6BBF")])
     st.markdown("".join(f'<span class="chip" style="background:{c};">{k}</span>' for k, c in GROUP_COLORS.items()),
                 unsafe_allow_html=True)
-
-    # --- Grup bazında özet (tablo + halka grafik) ---
-    order = ["Hedef müşteri", "Hızlı ivme", "Büyüyen mevcut müşteri"]
-    g = d.groupby("Grup").agg(F=("Firma", "count"), P26=("2026 Palet", "sum"),
-                              P27=("2027 Hedef Palet", "sum"), C27=("2027 Hedef Ciro", "sum"))
-    g = g.reindex([o for o in order if o in g.index])
-    g_cols = [GROUP_COLORS[x] for x in g.index]
-    gl, gr = st.columns([3, 2])
-    with gl:
-        render_table(
-            ["Grup", "Firma", "2026 Gerçekleşen Palet", "2027 Hedef Palet", "2027 Hedef Ciro"],
-            [g.index.tolist() + ["<b>TOPLAM</b>"],
-             [str(int(v)) for v in g["F"]] + [f"<b>{int(g['F'].sum())}</b>"],
-             [fmt_palet(v) if v > 0 else "—" for v in g["P26"]] + [f"<b>{fmt_palet(p26_all)}</b>"],
-             [fmt_palet(v) for v in g["P27"]] + [f"<b>{fmt_palet(tot_p)}</b>"],
-             [fmt_tl(v) for v in g["C27"]] + [f"<b>{fmt_tl(tot_c)}</b>"]],
-            [[mix(hex_rgb(c), 0.45) for c in g_cols] + [tot_fill],
-             [mix(hex_rgb(c), 0.22) for c in g_cols] + [tot_fill],
-             shade_rows(g["P26"], g_cols, lo=0.12, hi=0.5) + [tot_fill],
-             shade_rows(g["P27"], g_cols, lo=0.12, hi=0.5) + [tot_fill],
-             shade_rows(g["C27"], g_cols, lo=0.12, hi=0.55) + [tot_fill]],
-        )
-    with gr:
-        dn = go.Figure(go.Pie(
-            labels=g.index.tolist(), values=g["C27"].tolist(), hole=0.58, sort=False,
-            marker=dict(colors=g_cols, line=dict(color="white", width=3)),
-            textinfo="percent", textfont=dict(size=14, color="white"),
-            hovertemplate="<b>%{label}</b><br>%{value:,.0f} ₺<br>%{percent}<extra></extra>"))
-        dn.update_layout(template="plotly_white", separators=",.", height=250, showlegend=False,
-                         margin=dict(l=10, r=10, t=10, b=10),
-                         annotations=[dict(text=f"<b>{fmt_short_tl(tot_c)}</b>", x=0.5, y=0.5,
-                                           showarrow=False, font=dict(size=15))])
-        show(dn)
 
     # --- Firma bazında grafik ---
     banner("📊 Firma Bazında Hedef", ORANGE)
@@ -1068,83 +1029,19 @@ elif mode == MODES[2]:
                       showlegend=False, margin=dict(l=10, r=10, t=20, b=10))
     show(fig)
 
-    # --- Firma bazında tablo ---
+    # --- Firma bazında tablo (sade) ---
     render_table(
-        ["Firma", "Tür", "2026 Palet", "2026 Ciro", "2027 Hedef Palet", "Palet Başı Gelir", "2027 Hedef Ciro"],
+        ["Firma", "Tür", "2026 Palet", "2027 Hedef Palet", "Palet Başı Gelir", "2027 Hedef Ciro"],
         [names + ["<b>TOPLAM</b>"], d["Tür"].tolist() + [""],
          [fmt_palet(v) if v > 0 else "—" for v in d["2026 Palet"]] + [f"<b>{fmt_palet(p26_all)}</b>"],
-         [fmt_tl(v) if v > 0 else "—" for v in d["2026 Ciro"]] + [f"<b>{fmt_tl(c26_all)}</b>"],
          [fmt_palet(v) for v in d["2027 Hedef Palet"]] + [f"<b>{fmt_palet(tot_p)}</b>"],
          [fmt_tl(v) for v in d["Palet Başı ₺"]] + [f"<b>{fmt_tl(tot_c / tot_p if tot_p > 0 else 0)}</b>"],
          [fmt_tl(v) for v in d["2027 Hedef Ciro"]] + [f"<b>{fmt_tl(tot_c)}</b>"]],
         [[mix(hex_rgb(c), 0.32) for c in gcol] + [tot_fill], [mix(hex_rgb(c), 0.18) for c in gcol] + [tot_fill],
          shade_rows(d["2026 Palet"], gcol, lo=0.06, hi=0.30) + [tot_fill],
-         shade_rows(d["2026 Ciro"], gcol, lo=0.06, hi=0.30) + [tot_fill],
          shade_rows(d["2027 Hedef Palet"], gcol, lo=0.12, hi=0.55) + [tot_fill],
          [mix(hex_rgb(c), 0.10) for c in gcol] + [tot_fill],
          shade_rows(d["2027 Hedef Ciro"], gcol, lo=0.12, hi=0.60) + [tot_fill]],
     )
-    with st.expander("🔎 Excel eşleşmeleri (hangi firma Excel'deki hangi satırla eşleşti?)", expanded=False):
-        render_table(["Firma", "Excel'deki Ad"],
-                     [d["Firma"].tolist(), [x if x else "—" for x in d["Excel Eşleşmesi"]]],
-                     [["rgb(247,248,250)"] * n, ["rgb(247,248,250)"] * n], header_fill="#374151")
-    st.info(f"📌 **2027 Bütçe Beklentilerimiz:** Hedef müşteri listemizin en büyük firmaları, hızlı ivme gösteren firmalar ve büyüyen "
-            f"mevcut müşterilerimizle toplam **{n} firma** üzerinden 2027'de **{fmt_tl(tot_c)}** ciro ve **{fmt_palet(tot_p)}** palet hacmine ulaşmayı hedefliyoruz.")
-
-    # --- Hedef müşteri havuzu (segment bazında) ---
-    banner("📋 HEDEF MÜŞTERİ HAVUZU", "#8E6BBF")
-    st.caption(f"Segment bazında tüm hedef müşteriler; ciro = palet × {fmt_tl(UNIT)}. 2026 sütununda Excel'de karşılığı bulunan firmaların gerçekleşen paleti görünür.")
-
-    def act_palet(firma):
-        if df_2026.empty:
-            return 0.0
-        mm = df_2026[df_2026["Müşteri"].map(lambda x: names_match(firma, x))]
-        return float(mm.sort_values("Ciro", ascending=False).iloc[0]["Palet"]) if not mm.empty else 0.0
-
-    ids, labels, parents, values, colors, tcols = [], [], [], [], [], []
-    for (title, rs), lab, sc in zip(SEGMENTS, SEG_LABELS, SEG_COLORS):
-        sid = f"seg::{title}"
-        ids.append(sid); labels.append(lab); parents.append(""); values.append(float(sum(p for _, p in rs)))
-        colors.append(sc); tcols.append("#ffffff")
-        for nm, p in rs:
-            ids.append(f"{sid}::{nm}"); labels.append(nm); parents.append(sid); values.append(float(p))
-            colors.append(mix(hex_rgb(sc), 0.55)); tcols.append("#1f2937")
-    tm = go.Figure(go.Treemap(ids=ids, labels=labels, parents=parents, values=values, branchvalues="total",
-                              marker=dict(colors=colors, line=dict(color="white", width=2)),
-                              texttemplate="<b>%{label}</b><br>%{value} palet", textfont=dict(size=13, color=tcols),
-                              hovertemplate="<b>%{label}</b><br>%{value} palet<extra></extra>", pathbar=dict(visible=False)))
-    tm.update_layout(template="plotly_white", height=440, margin=dict(l=0, r=0, t=6, b=0))
-    show(tm)
-
-    seg_pairs = list(zip(SEG_LABELS, SEG_COLORS, SEGMENTS))
-    for row in (seg_pairs[:2], seg_pairs[2:]):
-        for col, (lab, sc, (title, rs)) in zip(st.columns(2), row):
-            with col:
-                sd = pd.DataFrame(rs, columns=["UNVAN", "HEDEF PALET"])
-                sd["HEDEF CİRO"] = sd["HEDEF PALET"] * UNIT
-                sd["P26"] = [act_palet(x) for x in sd["UNVAN"]]
-                m_ = len(sd)
-                tfill = mix(hex_rgb(sc), 0.32)
-                st.markdown(f'<div style="background:linear-gradient(90deg,{sc},{sc}CC);color:white;padding:9px 14px;'
-                            f'border-radius:10px;font-weight:700;font-size:1rem;margin-top:6px;">{lab}</div>',
-                            unsafe_allow_html=True)
-                st.caption(f"{fmt_palet(sd['HEDEF PALET'].sum())} palet · {fmt_short_tl(sd['HEDEF CİRO'].sum())}")
-                got = ["rgb(214,240,224)" if v > 0 else mix(hex_rgb(sc), 0.10) for v in sd["P26"]]
-                render_table(
-                    ["UNVAN", "2026 PALET", "HEDEF PALET", "HEDEF CİRO"],
-                    [sd["UNVAN"].tolist() + ["<b>TOPLAM</b>"],
-                     [fmt_palet(v) if v > 0 else "—" for v in sd["P26"]] + [f"<b>{fmt_palet(sd['P26'].sum())}</b>"],
-                     [fmt_palet(v) for v in sd["HEDEF PALET"]] + [f"<b>{fmt_palet(sd['HEDEF PALET'].sum())}</b>"],
-                     [fmt_short_tl(v) for v in sd["HEDEF CİRO"]] + [f"<b>{fmt_short_tl(sd['HEDEF CİRO'].sum())}</b>"]],
-                    [[mix(hex_rgb(sc), 0.12)] * m_ + [tfill],
-                     got + [tfill],
-                     shade_rows(sd["HEDEF PALET"], [sc] * m_, lo=0.10, hi=0.55) + [tfill],
-                     shade_rows(sd["HEDEF CİRO"], [sc] * m_, lo=0.10, hi=0.55) + [tfill]],
-                    font_size=11, header_fill=sc,
-                )
-    with st.expander("➕ Ek olarak araştırılacak firmalar"):
-        cols = st.columns(len(EXTRA_POOL))
-        for col, (grp, nms) in zip(cols, EXTRA_POOL.items()):
-            with col:
-                st.markdown(f"**{grp}**")
-                st.markdown("\n".join(f"* {x}" for x in nms))
+    st.info(f"📌 **2027 Bütçe Beklentilerimiz:** {n} firma üzerinden 2027'de **{fmt_tl(tot_c)}** ciro ve "
+            f"**{fmt_palet(tot_p)}** palet hacmine ulaşmayı hedefliyoruz.")
