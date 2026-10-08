@@ -33,6 +33,8 @@ div[data-testid="stMarkdownContainer"] p, div[data-testid="stMarkdownContainer"]
 .pro-tbl td{padding:6px 12px;border-bottom:1px solid #eef1f6;white-space:nowrap;}
 .pro-tbl td:first-child{white-space:normal;}
 .pro-tbl td.wrap{white-space:normal;min-width:240px;}
+.pro-tbl.compact th{padding:5px 8px;}
+.pro-tbl.compact td{padding:3px 8px;}
 .hero{background:linear-gradient(100deg,#12306b,#1F4E9C 60%,#2F7BD0);color:#fff;border-radius:14px;padding:18px 24px;margin-bottom:10px;box-shadow:0 2px 8px rgba(16,24,40,.15);}
 .hero .t{font-size:1.55rem;font-weight:800;letter-spacing:.2px;}
 .hero .s{font-size:0.9rem;opacity:.85;margin-top:2px;}
@@ -202,7 +204,7 @@ def _auto_widths(headers, cols):
         out.append(max(longest, 4))
     return out
 
-def render_table(headers, cols, fills, widths=None, font_size=12, font_colors=None, header_fill=BLUE, left_cols=(0,)):
+def render_table(headers, cols, fills, widths=None, font_size=12, font_colors=None, header_fill=BLUE, left_cols=(0,), compact=False):
     """HTML tablo: hücreler tek satırda kalır, uzun rakamlar (ör. 84.123.456 ₺) asla kesilmez; geniş tablo kaydırılır."""
     n = len(cols[0]) if cols else 0
     esc = lambda x: str(x).replace("&", "&amp;")
@@ -222,7 +224,7 @@ def render_table(headers, cols, fills, widths=None, font_size=12, font_colors=No
             cls = ' class="wrap"' if (j in left_cols and j != 0) else ""
             tds.append(f'<td{cls} style="background:{fill};color:{fc};text-align:{al};font-size:{font_size}px;">{esc(c[i])}</td>')
         body.append("<tr>" + "".join(tds) + "</tr>")
-    html = (f'<div class="pro-wrap"><table class="pro-tbl"><thead><tr>{th}</tr></thead>'
+    html = (f'<div class="pro-wrap"><table class="pro-tbl{" compact" if compact else ""}"><thead><tr>{th}</tr></thead>'
             f'<tbody>{"".join(body)}</tbody></table></div>')
     st.markdown(html, unsafe_allow_html=True)
 
@@ -1061,20 +1063,49 @@ elif mode == MODES[2]:
           (f"Mevcut Portföy (+%{gr})", fmt_short_tl(base27), TEAL),
           ("Hedef Firmalardan Ek Ciro", fmt_short_tl(ek), ORANGE, f"{n} firma", "#5b6574")])
 
-    # --- Sade firma tablosu ---
-    banner("📋 Hedef Firmalar", ORANGE)
+    # --- Yan yana iki küçük tablo (tek slayta sığacak) ---
+    DROP_TOK = {"ANONIM", "SIRKETI", "AS", "LTD", "STI", "LIMITED", "SAN", "TIC", "VE", "SANAYI",
+                "TICARET", "PAZARLAMA", "TURKIYE", "ISLETMELERI"}
+
+    def short_name(x):
+        toks = []
+        for t in str(x).split():
+            c = re.sub(r"[^A-Z0-9]", "", norm(t))
+            if c and c not in DROP_TOK:
+                toks.append(t)
+        return " ".join(toks[:3]) if toks else str(x)
+
+    d["Gösterim"] = [f if str(t).startswith("Hedef") else short_name(f) for f, t in zip(d["Firma"], d["Tür"])]
+    d["Mevcut"] = (d["2026 Palet"] > 0) | (d["2026 Ciro"] > 0)
     tot_fill = "rgb(226,233,244)"
-    zebra = ["rgb(255,255,255)" if i % 2 == 0 else "rgb(246,248,251)" for i in range(n)] + [tot_fill]
-    durum = [t.split(" (")[0] for t in d["Tür"]]
-    render_table(
-        ["Firma", "Durum", "2026 Palet", "2027 Hedef Palet", "2027 Hedef Ciro", "Not"],
-        [d["Firma"].tolist() + ["<b>TOPLAM</b>"], durum + [""],
-         [fmt_palet(v) if v > 0 else "—" for v in d["2026 Palet"]] + [f"<b>{fmt_palet(p26_all)}</b>"],
-         [fmt_palet(v) for v in d["2027 Hedef Palet"]] + [f"<b>{fmt_palet(tot_p)}</b>"],
-         [fmt_short_tl(v) for v in d["2027 Hedef Ciro"]] + [f"<b>{fmt_short_tl(tot_c)}</b>"],
-         d["Not"].tolist() + [""]],
-        [zebra] * 6, left_cols=(0, 1, 5),
-    )
+
+    def mini_table(sub, mevcut, color):
+        m_ = len(sub)
+        if m_ == 0:
+            st.caption("Bu grupta firma yok." if not df_2026.empty or not mevcut else "2026 Excel dosyasını yükleyin.")
+            return
+        z = ["rgb(255,255,255)" if i % 2 == 0 else "rgb(246,248,251)" for i in range(m_)] + [tot_fill]
+        nm = [f"{x}{' 🔁' if k in dorm else ''}" for x, k in zip(sub["Gösterim"], sub["Anahtar"])]
+        cols = [nm + ["<b>TOPLAM</b>"]]
+        heads = ["Firma"]
+        if mevcut:
+            heads.append("2026 Palet")
+            cols.append([fmt_palet(v) for v in sub["2026 Palet"]] + [f"<b>{fmt_palet(sub['2026 Palet'].sum())}</b>"])
+        heads += ["2027 Hedef Palet", "2027 Hedef Ciro"]
+        cols.append([fmt_palet(v) for v in sub["2027 Hedef Palet"]] + [f"<b>{fmt_palet(sub['2027 Hedef Palet'].sum())}</b>"])
+        cols.append([fmt_short_tl(v) for v in sub["2027 Hedef Ciro"]] + [f"<b>{fmt_short_tl(sub['2027 Hedef Ciro'].sum())}</b>"])
+        render_table(heads, cols, [z] * len(cols), font_size=11, header_fill=color, compact=True)
+
+    tl, tr_ = st.columns(2)
+    with tl:
+        yeni = d[~d["Mevcut"]]
+        banner(f"🎯 Hedef Müşteriler ({len(yeni)} firma)", ORANGE)
+        mini_table(yeni, False, ORANGE)
+    with tr_:
+        mev = d[d["Mevcut"]]
+        banner(f"✅ Mevcut Müşteriler ({len(mev)} firma)", BLUE)
+        mini_table(mev, True, BLUE)
+    st.caption("🔁 = son aylarda palet vermiyor, 2027'de tekrar denenebilir. Hedef ciro = hedef palet × palet başı gelir.")
 
     # --- Yorumlar ---
     st.subheader("💡 Yorumlarımız")
